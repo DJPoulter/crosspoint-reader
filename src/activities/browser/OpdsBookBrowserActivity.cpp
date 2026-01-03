@@ -11,7 +11,7 @@
 namespace {
 constexpr int PAGE_ITEMS = 23;
 constexpr int SKIP_PAGE_MS = 700;
-constexpr char OPDS_FEED_PATH[] = "/opds";
+constexpr char OPDS_ROOT_PATH[] = "opds";  // No leading slash - relative to server URL
 
 // Prepend http:// if no protocol specified (server will redirect to https if needed)
 std::string ensureProtocol(const std::string& url) {
@@ -19,6 +19,39 @@ std::string ensureProtocol(const std::string& url) {
     return "http://" + url;
   }
   return url;
+}
+
+// Extract host with protocol from URL (e.g., "http://example.com" from "http://example.com/path")
+std::string extractHost(const std::string& url) {
+  const size_t protocolEnd = url.find("://");
+  if (protocolEnd == std::string::npos) {
+    // No protocol, find first slash
+    const size_t firstSlash = url.find('/');
+    return firstSlash == std::string::npos ? url : url.substr(0, firstSlash);
+  }
+  // Find the first slash after the protocol
+  const size_t hostStart = protocolEnd + 3;
+  const size_t pathStart = url.find('/', hostStart);
+  return pathStart == std::string::npos ? url : url.substr(0, pathStart);
+}
+
+// Build full URL from server URL and path
+// If path starts with /, it's an absolute path from the host root
+// Otherwise, it's relative to the server URL
+std::string buildUrl(const std::string& serverUrl, const std::string& path) {
+  const std::string urlWithProtocol = ensureProtocol(serverUrl);
+  if (path.empty()) {
+    return urlWithProtocol;
+  }
+  if (path[0] == '/') {
+    // Absolute path - use just the host
+    return extractHost(urlWithProtocol) + path;
+  }
+  // Relative path - append to server URL
+  if (urlWithProtocol.back() == '/') {
+    return urlWithProtocol + path;
+  }
+  return urlWithProtocol + "/" + path;
 }
 }  // namespace
 
@@ -32,7 +65,9 @@ void OpdsBookBrowserActivity::onEnter() {
 
   renderingMutex = xSemaphoreCreateMutex();
   state = BrowserState::LOADING;
-  books.clear();
+  entries.clear();
+  navigationHistory.clear();
+  currentPath = OPDS_ROOT_PATH;
   selectorIndex = 0;
   errorMessage.clear();
   statusMessage = "Loading...";
@@ -45,8 +80,8 @@ void OpdsBookBrowserActivity::onEnter() {
               &displayTaskHandle  // Task handle
   );
 
-  // Fetch books after setting up the display task
-  fetchBooks();
+  // Fetch feed after setting up the display task
+  fetchFeed(currentPath);
 }
 
 void OpdsBookBrowserActivity::onExit() {
@@ -59,27 +94,28 @@ void OpdsBookBrowserActivity::onExit() {
   }
   vSemaphoreDelete(renderingMutex);
   renderingMutex = nullptr;
-  books.clear();
+  entries.clear();
+  navigationHistory.clear();
 }
 
 void OpdsBookBrowserActivity::loop() {
-  // Handle error state - Confirm retries, Back goes home
+  // Handle error state - Confirm retries, Back goes back or home
   if (state == BrowserState::ERROR) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       state = BrowserState::LOADING;
       statusMessage = "Loading...";
       updateRequired = true;
-      fetchBooks();
+      fetchFeed(currentPath);
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      onGoHome();
+      navigateBack();
     }
     return;
   }
 
-  // Handle loading state - only Back goes home
+  // Handle loading state - only Back works
   if (state == BrowserState::LOADING) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      onGoHome();
+      navigateBack();
     }
     return;
   }
@@ -89,8 +125,8 @@ void OpdsBookBrowserActivity::loop() {
     return;
   }
 
-  // Handle book list state
-  if (state == BrowserState::BOOK_LIST) {
+  // Handle browsing state
+  if (state == BrowserState::BROWSING) {
     const bool prevReleased = mappedInput.wasReleased(MappedInputManager::Button::Up) ||
                               mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool nextReleased = mappedInput.wasReleased(MappedInputManager::Button::Down) ||
@@ -98,23 +134,28 @@ void OpdsBookBrowserActivity::loop() {
     const bool skipPage = mappedInput.getHeldTime() > SKIP_PAGE_MS;
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      if (!books.empty()) {
-        downloadBook(books[selectorIndex]);
+      if (!entries.empty()) {
+        const auto& entry = entries[selectorIndex];
+        if (entry.type == OpdsEntryType::BOOK) {
+          downloadBook(entry);
+        } else {
+          navigateToEntry(entry);
+        }
       }
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      onGoHome();
-    } else if (prevReleased && !books.empty()) {
+      navigateBack();
+    } else if (prevReleased && !entries.empty()) {
       if (skipPage) {
-        selectorIndex = ((selectorIndex / PAGE_ITEMS - 1) * PAGE_ITEMS + books.size()) % books.size();
+        selectorIndex = ((selectorIndex / PAGE_ITEMS - 1) * PAGE_ITEMS + entries.size()) % entries.size();
       } else {
-        selectorIndex = (selectorIndex + books.size() - 1) % books.size();
+        selectorIndex = (selectorIndex + entries.size() - 1) % entries.size();
       }
       updateRequired = true;
-    } else if (nextReleased && !books.empty()) {
+    } else if (nextReleased && !entries.empty()) {
       if (skipPage) {
-        selectorIndex = ((selectorIndex / PAGE_ITEMS + 1) * PAGE_ITEMS) % books.size();
+        selectorIndex = ((selectorIndex / PAGE_ITEMS + 1) * PAGE_ITEMS) % entries.size();
       } else {
-        selectorIndex = (selectorIndex + 1) % books.size();
+        selectorIndex = (selectorIndex + 1) % entries.size();
       }
       updateRequired = true;
     }
@@ -171,12 +212,17 @@ void OpdsBookBrowserActivity::render() const {
     return;
   }
 
-  // Book list state
-  const auto labels = mappedInput.mapLabels("« Back", "Download", "", "");
+  // Browsing state
+  // Show appropriate button hint based on selected entry type
+  const char* confirmLabel = "Open";
+  if (!entries.empty() && entries[selectorIndex].type == OpdsEntryType::BOOK) {
+    confirmLabel = "Download";
+  }
+  const auto labels = mappedInput.mapLabels("« Back", confirmLabel, "", "");
   renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  if (books.empty()) {
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "No books found");
+  if (entries.empty()) {
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "No entries found");
     renderer.displayBuffer();
     return;
   }
@@ -184,11 +230,19 @@ void OpdsBookBrowserActivity::render() const {
   const auto pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
   renderer.fillRect(0, 60 + (selectorIndex % PAGE_ITEMS) * 30 - 2, pageWidth - 1, 30);
 
-  for (size_t i = pageStartIndex; i < books.size() && i < static_cast<size_t>(pageStartIndex + PAGE_ITEMS); i++) {
-    // Format: "Title - Author" or just "Title" if no author
-    std::string displayText = books[i].title;
-    if (!books[i].author.empty()) {
-      displayText += " - " + books[i].author;
+  for (size_t i = pageStartIndex; i < entries.size() && i < static_cast<size_t>(pageStartIndex + PAGE_ITEMS); i++) {
+    const auto& entry = entries[i];
+
+    // Format display text with type indicator
+    std::string displayText;
+    if (entry.type == OpdsEntryType::NAVIGATION) {
+      displayText = "> " + entry.title;  // Folder/navigation indicator
+    } else {
+      // Book: "Title - Author" or just "Title"
+      displayText = entry.title;
+      if (!entry.author.empty()) {
+        displayText += " - " + entry.author;
+      }
     }
 
     auto item = renderer.truncatedText(UI_10_FONT_ID, displayText.c_str(), renderer.getScreenWidth() - 40);
@@ -198,7 +252,7 @@ void OpdsBookBrowserActivity::render() const {
   renderer.displayBuffer();
 }
 
-void OpdsBookBrowserActivity::fetchBooks() {
+void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   const char* serverUrl = SETTINGS.opdsServerUrl;
   if (strlen(serverUrl) == 0) {
     state = BrowserState::ERROR;
@@ -207,7 +261,7 @@ void OpdsBookBrowserActivity::fetchBooks() {
     return;
   }
 
-  std::string url = ensureProtocol(serverUrl) + OPDS_FEED_PATH;
+  std::string url = buildUrl(serverUrl, path);
   Serial.printf("[%lu] [OPDS] Fetching: %s\n", millis(), url.c_str());
 
   std::string content;
@@ -226,21 +280,54 @@ void OpdsBookBrowserActivity::fetchBooks() {
     return;
   }
 
-  books = parser.getBooks();
+  entries = parser.getEntries();
   selectorIndex = 0;
 
-  if (books.empty()) {
+  if (entries.empty()) {
     state = BrowserState::ERROR;
-    errorMessage = "No books found";
+    errorMessage = "No entries found";
     updateRequired = true;
     return;
   }
 
-  state = BrowserState::BOOK_LIST;
+  state = BrowserState::BROWSING;
   updateRequired = true;
 }
 
-void OpdsBookBrowserActivity::downloadBook(const OpdsBook& book) {
+void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
+  // Push current path to history before navigating
+  navigationHistory.push_back(currentPath);
+  currentPath = entry.href;
+
+  state = BrowserState::LOADING;
+  statusMessage = "Loading...";
+  entries.clear();
+  selectorIndex = 0;
+  updateRequired = true;
+
+  fetchFeed(currentPath);
+}
+
+void OpdsBookBrowserActivity::navigateBack() {
+  if (navigationHistory.empty()) {
+    // At root, go home
+    onGoHome();
+  } else {
+    // Go back to previous catalog
+    currentPath = navigationHistory.back();
+    navigationHistory.pop_back();
+
+    state = BrowserState::LOADING;
+    statusMessage = "Loading...";
+    entries.clear();
+    selectorIndex = 0;
+    updateRequired = true;
+
+    fetchFeed(currentPath);
+  }
+}
+
+void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   state = BrowserState::DOWNLOADING;
   statusMessage = book.title;
   downloadProgress = 0;
@@ -248,7 +335,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsBook& book) {
   updateRequired = true;
 
   // Build full download URL
-  std::string downloadUrl = ensureProtocol(SETTINGS.opdsServerUrl) + book.epubUrl;
+  std::string downloadUrl = buildUrl(SETTINGS.opdsServerUrl, book.href);
 
   // Create sanitized filename
   std::string filename = "/" + sanitizeFilename(book.title) + ".epub";
@@ -264,7 +351,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsBook& book) {
 
   if (result == HttpDownloader::OK) {
     Serial.printf("[%lu] [OPDS] Download complete: %s\n", millis(), filename.c_str());
-    state = BrowserState::BOOK_LIST;
+    state = BrowserState::BROWSING;
     updateRequired = true;
   } else {
     state = BrowserState::ERROR;

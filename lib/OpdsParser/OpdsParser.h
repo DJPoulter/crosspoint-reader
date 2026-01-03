@@ -5,14 +5,26 @@
 #include <vector>
 
 /**
- * Represents a book entry from an OPDS feed.
+ * Type of OPDS entry.
  */
-struct OpdsBook {
+enum class OpdsEntryType {
+  NAVIGATION,  // Link to another catalog
+  BOOK         // Downloadable book
+};
+
+/**
+ * Represents an entry from an OPDS feed (either a navigation link or a book).
+ */
+struct OpdsEntry {
+  OpdsEntryType type = OpdsEntryType::NAVIGATION;
   std::string title;
-  std::string author;
-  std::string epubUrl;  // Relative URL like "/books/get/epub/3/Calibre_Library"
+  std::string author;      // Only for books
+  std::string href;        // Navigation URL or epub download URL
   std::string id;
 };
+
+// Legacy alias for backward compatibility
+using OpdsBook = OpdsEntry;
 
 /**
  * Parser for OPDS (Open Publication Distribution System) Atom feeds.
@@ -21,8 +33,12 @@ struct OpdsBook {
  * Usage:
  *   OpdsParser parser;
  *   if (parser.parse(xmlData, xmlLength)) {
- *     for (const auto& book : parser.getBooks()) {
- *       // Process book entries
+ *     for (const auto& entry : parser.getEntries()) {
+ *       if (entry.type == OpdsEntryType::BOOK) {
+ *         // Downloadable book
+ *       } else {
+ *         // Navigation link to another catalog
+ *       }
  *     }
  *   }
  */
@@ -44,13 +60,19 @@ class OpdsParser {
   bool parse(const char* xmlData, size_t length);
 
   /**
-   * Get the parsed books.
-   * @return Vector of OpdsBook entries
+   * Get the parsed entries (both navigation and book entries).
+   * @return Vector of OpdsEntry entries
    */
-  const std::vector<OpdsBook>& getBooks() const { return books; }
+  const std::vector<OpdsEntry>& getEntries() const { return entries; }
 
   /**
-   * Clear all parsed books.
+   * Get only book entries (legacy compatibility).
+   * @return Vector of book entries
+   */
+  std::vector<OpdsEntry> getBooks() const;
+
+  /**
+   * Clear all parsed entries.
    */
   void clear();
 
@@ -64,8 +86,8 @@ class OpdsParser {
   static const char* findAttribute(const XML_Char** atts, const char* name);
 
   XML_Parser parser = nullptr;
-  std::vector<OpdsBook> books;
-  OpdsBook currentBook;
+  std::vector<OpdsEntry> entries;
+  OpdsEntry currentEntry;
   std::string currentText;
 
   // Parser state

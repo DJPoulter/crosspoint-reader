@@ -12,13 +12,13 @@
 
 /**
  * Activity for browsing and downloading books from an OPDS server.
- * Displays a list of available books and allows downloading EPUBs.
+ * Supports navigation through catalog hierarchy and downloading EPUBs.
  */
 class OpdsBookBrowserActivity final : public Activity {
  public:
   enum class BrowserState {
     LOADING,      // Fetching OPDS feed
-    BOOK_LIST,    // Displaying books
+    BROWSING,     // Displaying entries (navigation or books)
     DOWNLOADING,  // Downloading selected EPUB
     ERROR         // Error state with message
   };
@@ -37,7 +37,9 @@ class OpdsBookBrowserActivity final : public Activity {
   bool updateRequired = false;
 
   BrowserState state = BrowserState::LOADING;
-  std::vector<OpdsBook> books;
+  std::vector<OpdsEntry> entries;
+  std::vector<std::string> navigationHistory;  // Stack of previous feed paths for back navigation
+  std::string currentPath;                     // Current feed path being displayed
   int selectorIndex = 0;
   std::string errorMessage;
   std::string statusMessage;
@@ -50,7 +52,9 @@ class OpdsBookBrowserActivity final : public Activity {
   [[noreturn]] void displayTaskLoop();
   void render() const;
 
-  void fetchBooks();
-  void downloadBook(const OpdsBook& book);
+  void fetchFeed(const std::string& path);
+  void navigateToEntry(const OpdsEntry& entry);
+  void navigateBack();
+  void downloadBook(const OpdsEntry& book);
   std::string sanitizeFilename(const std::string& title) const;
 };
