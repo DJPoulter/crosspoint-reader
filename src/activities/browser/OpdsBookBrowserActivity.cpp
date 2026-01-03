@@ -385,7 +385,7 @@ std::string OpdsBookBrowserActivity::sanitizeFilename(const std::string& title) 
 
   // Limit filename length (SD card FAT32 has 255 char limit, but let's be safe)
   if (result.length() > 100) {
-    result = result.substr(0, 100);
+    result.resize(100);
   }
 
   return result.empty() ? "book" : result;

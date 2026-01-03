@@ -67,7 +67,7 @@ class CrossPointSettings {
   uint8_t paragraphAlignment = JUSTIFIED;
   uint8_t sideMargin = MARGIN_SMALL;
   // OPDS browser settings
-  char opdsServerUrl[128] = "";  // e.g., "https://home.jmitch.com/books"
+  char opdsServerUrl[128] = "";
 
   ~CrossPointSettings() = default;
 
