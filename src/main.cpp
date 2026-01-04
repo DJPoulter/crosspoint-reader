@@ -132,8 +132,6 @@ EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
-// Auto-sleep timeout (10 minutes of inactivity)
-constexpr unsigned long AUTO_SLEEP_TIMEOUT_MS = 10 * 60 * 1000;
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
 unsigned long t2 = 0;
@@ -156,8 +154,10 @@ void verifyWakeupLongPress() {
   // Give the user up to 1000ms to start holding the power button, and must hold for SETTINGS.getPowerButtonDuration()
   const auto start = millis();
   bool abort = false;
-  // It takes us some time to wake up from deep sleep, so we need to subtract that from the duration
-  constexpr uint16_t calibration = 29;
+  // Subtract the current time, because inputManager only starts counting the HeldTime from the first update()
+  // This way, we remove the time we already took to reach here from the duration,
+  // assuming the button was held until now from millis()==0 (i.e. device start time).
+  const uint16_t calibration = start;
   const uint16_t calibratedPressDuration =
       (calibration < SETTINGS.getPowerButtonDuration()) ? SETTINGS.getPowerButtonDuration() - calibration : 1;
 
@@ -334,8 +334,9 @@ void loop() {
     lastActivityTime = millis();  // Reset inactivity timer
   }
 
-  if (millis() - lastActivityTime >= AUTO_SLEEP_TIMEOUT_MS) {
-    Serial.printf("[%lu] [SLP] Auto-sleep triggered after %lu ms of inactivity\n", millis(), AUTO_SLEEP_TIMEOUT_MS);
+  const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
+  if (millis() - lastActivityTime >= sleepTimeoutMs) {
+    Serial.printf("[%lu] [SLP] Auto-sleep triggered after %lu ms of inactivity\n", millis(), sleepTimeoutMs);
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;

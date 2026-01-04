@@ -12,7 +12,7 @@
 
 // Define the static settings list
 namespace {
-constexpr int settingsCount = 13;
+constexpr int settingsCount = 15;
 const SettingInfo settingsList[settingsCount] = {
     // Should match with SLEEP_SCREEN_MODE
     {"Sleep Screen", SettingType::ENUM, &CrossPointSettings::sleepScreen, {"Dark", "Light", "Custom", "Cover"}},
@@ -41,6 +41,14 @@ const SettingInfo settingsList[settingsCount] = {
      SettingType::ENUM,
      &CrossPointSettings::paragraphAlignment,
      {"Justify", "Left", "Center", "Right"}},
+    {"Time to Sleep",
+     SettingType::ENUM,
+     &CrossPointSettings::sleepTimeout,
+     {"1 min", "5 min", "10 min", "15 min", "30 min"}},
+    {"Refresh Frequency",
+     SettingType::ENUM,
+     &CrossPointSettings::refreshFrequency,
+     {"1 page", "5 pages", "10 pages", "15 pages", "30 pages"}},
     {"Calibre Settings", SettingType::ACTION, nullptr, {}},
     {"Check for updates", SettingType::ACTION, nullptr, {}},
 };
