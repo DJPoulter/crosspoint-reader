@@ -280,20 +280,72 @@ void SleepActivity::renderOverlaySleepScreen() const {
     renderer.clearScreen();
   }
 
-  // Look for overlay.bmp on the root of the SD card
-  Serial.printf("[%lu] [SLP] Opening overlay.bmp file\n", millis());
+  // Look for sleep.bmp or sleep folder
   FsFile overlayFile;
-  if (!SdMan.openFileForRead("SLP", "/overlay.bmp", overlayFile)) {
-    Serial.printf("[%lu] [SLP] ERROR: Failed to open /overlay.bmp, falling back to default sleep screen\n", millis());
+  bool foundOverlay = false;
+  
+  // First check if we have a /sleep directory
+  auto dir = SdMan.open("/sleep");
+  if (dir && dir.isDirectory()) {
+    std::vector<std::string> files;
+    char name[500];
+    // collect all valid BMP files
+    for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+      if (file.isDirectory()) {
+        file.close();
+        continue;
+      }
+      file.getName(name, sizeof(name));
+      auto filename = std::string(name);
+      if (filename[0] == '.') {
+        file.close();
+        continue;
+      }
+
+      if (filename.substr(filename.length() - 4) != ".bmp") {
+        file.close();
+        continue;
+      }
+      Bitmap bitmap(file);
+      if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+        file.close();
+        continue;
+      }
+      files.emplace_back(filename);
+      file.close();
+    }
+    const auto numFiles = files.size();
+    if (numFiles > 0) {
+      // Generate a random number between 0 and numFiles-1
+      const auto randomFileIndex = random(numFiles);
+      const auto filename = "/sleep/" + files[randomFileIndex];
+      if (SdMan.openFileForRead("SLP", filename, overlayFile)) {
+        Serial.printf("[%lu] [SLP] Randomly loading: /sleep/%s\n", millis(), files[randomFileIndex].c_str());
+        foundOverlay = true;
+      }
+    }
+  }
+  if (dir) dir.close();
+
+  // If not found in /sleep folder, try /sleep.bmp on root
+  if (!foundOverlay) {
+    if (SdMan.openFileForRead("SLP", "/sleep.bmp", overlayFile)) {
+      Serial.printf("[%lu] [SLP] Loading: /sleep.bmp\n", millis());
+      foundOverlay = true;
+    }
+  }
+
+  if (!foundOverlay) {
+    Serial.printf("[%lu] [SLP] ERROR: Failed to find sleep.bmp or sleep folder, falling back to default sleep screen\n", millis());
     renderDefaultSleepScreen();
     return;
   }
-  Serial.printf("[%lu] [SLP] Successfully opened overlay.bmp\n", millis());
+  Serial.printf("[%lu] [SLP] Successfully opened sleep overlay file\n", millis());
 
   Bitmap overlay(overlayFile);
   const BmpReaderError overlayError = overlay.parseHeaders();
   if (overlayError != BmpReaderError::Ok) {
-    Serial.printf("[%lu] [SLP] ERROR: Failed to parse overlay.bmp headers (error=%d), falling back to default\n", 
+    Serial.printf("[%lu] [SLP] ERROR: Failed to parse sleep overlay headers (error=%d), falling back to default\n", 
                   millis(), static_cast<int>(overlayError));
     overlayFile.close();
     renderDefaultSleepScreen();
