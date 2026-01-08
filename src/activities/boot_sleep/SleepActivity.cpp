@@ -20,15 +20,20 @@ void SleepActivity::onEnter() {
     Serial.printf("[%lu] [SLP] Entering overlay sleep mode\n", millis());
     // For overlay mode: store framebuffer (book content), show popup, then restore and draw overlay
     // Store the framebuffer before popup overwrites it
-    // Check if we're actually on a book by checking if openEpubPath is set and file exists
-    // AND if storeBwBuffer succeeds (meaning there's content to store)
-    const bool hasBookPath = !APP_STATE.openEpubPath.empty() && SdMan.exists(APP_STATE.openEpubPath.c_str());
-    const bool hasStoredBuffer = renderer.storeBwBuffer();
-    // We're on a book if we have a book path AND we successfully stored the buffer
-    // (storeBwBuffer can succeed for any content, but combined with book path check, it's more reliable)
-    isOnBook = hasBookPath && hasStoredBuffer;
-    Serial.printf("[%lu] [SLP] Overlay mode: hasBookPath=%d, hasStoredBuffer=%d, isOnBook=%d\n", 
-                  millis(), hasBookPath, hasStoredBuffer, isOnBook);
+    // Check if we're on a book reader activity by checking the activity name
+    // Book reader activities are "EpubReader" or "XtcReader"
+    isOnBook = (previousActivityName == "EpubReader" || previousActivityName == "XtcReader");
+    Serial.printf("[%lu] [SLP] Overlay mode: previousActivity='%s', isOnBook=%d\n", 
+                  millis(), previousActivityName.c_str(), isOnBook);
+    
+    if (isOnBook) {
+      // On a book - store the framebuffer before popup overwrites it
+      if (!renderer.storeBwBuffer()) {
+        Serial.printf("[%lu] [SLP] Failed to store BW buffer, treating as not on book\n", millis());
+        isOnBook = false;
+      }
+    }
+    
     if (!isOnBook) {
       // Not on a book - clear screen to black before showing overlay
       Serial.printf("[%lu] [SLP] Not on book - clearing screen to black\n", millis());
