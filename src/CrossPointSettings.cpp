@@ -14,7 +14,7 @@ CrossPointSettings CrossPointSettings::instance;
 namespace {
 constexpr uint8_t SETTINGS_FILE_VERSION = 1;
 // Increment this when adding new persisted settings fields
-constexpr uint8_t SETTINGS_COUNT = 18;
+constexpr uint8_t SETTINGS_COUNT = 19;
 constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
 }  // namespace
 
@@ -47,6 +47,7 @@ bool CrossPointSettings::saveToFile() const {
   serialization::writeString(outputFile, std::string(opdsServerUrl));
   serialization::writePod(outputFile, textAntiAliasing);
   serialization::writePod(outputFile, darkMode);
+  serialization::writePod(outputFile, resumeOnBoot);
   outputFile.close();
 
   Serial.printf("[%lu] [CPS] Settings saved to file\n", millis());
@@ -112,6 +113,8 @@ bool CrossPointSettings::loadFromFile() {
     serialization::readPod(inputFile, textAntiAliasing);
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, darkMode);
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPod(inputFile, resumeOnBoot);
     if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 
