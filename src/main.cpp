@@ -199,16 +199,18 @@ static bool isOnBookReader() {
     Serial.printf("[%lu] [   ] isOnBookReader: no current activity\n", millis());
     return false;
   }
-  const std::string& activityName = currentActivity->getName();
-  // Check if we're on a reader activity (Reader, EpubReader, or XtcReader)
-  const bool isOnBook = activityName == "Reader" || activityName == "EpubReader" || activityName == "XtcReader";
+  // Use getEffectiveActivityName to check subactivity (e.g., FileSelection vs EpubReader)
+  const std::string activityName = currentActivity->getEffectiveActivityName();
+  // Check if we're on a book reader activity (EpubReader or XtcReader)
+  // Note: "Reader" parent activity is not considered on book unless subactivity is a book reader
+  const bool isOnBook = activityName == "EpubReader" || activityName == "XtcReader";
   Serial.printf("[%lu] [   ] isOnBookReader: activity='%s', result=%d\n", millis(), activityName.c_str(), isOnBook);
   return isOnBook;
 }
 
 // Enter deep sleep mode
 void enterDeepSleep() {
-  // Track if we were on a book when entering sleep
+  // Track if we were on a book when entering sleep (for resume-on-boot)
   APP_STATE.wasOnBook = isOnBookReader();
   Serial.printf("[%lu] [   ] enterDeepSleep: wasOnBook=%d, openEpubPath='%s'\n", millis(), 
                 APP_STATE.wasOnBook, APP_STATE.openEpubPath.c_str());
@@ -218,8 +220,12 @@ void enterDeepSleep() {
     Serial.printf("[%lu] [   ] enterDeepSleep: state saved successfully\n", millis());
   }
   
+  // Get the effective activity name BEFORE exiting (exitActivity may change currentActivity)
+  // For ActivityWithSubactivity, this returns the subactivity name if available
+  std::string effectiveActivityName = currentActivity ? currentActivity->getEffectiveActivityName() : "";
+  Serial.printf("[%lu] [   ] Captured effective activity name: '%s'\n", millis(), effectiveActivityName.c_str());
   exitActivity();
-  enterNewActivity(new SleepActivity(renderer, mappedInputManager));
+  enterNewActivity(new SleepActivity(renderer, mappedInputManager, effectiveActivityName));
 
   einkDisplay.deepSleep();
   Serial.printf("[%lu] [   ] Power button press calibration value: %lu ms\n", millis(), t2 - t1);

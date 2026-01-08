@@ -20,14 +20,24 @@ void SleepActivity::onEnter() {
     Serial.printf("[%lu] [SLP] Entering overlay sleep mode\n", millis());
     // For overlay mode: store framebuffer (book content), show popup, then restore and draw overlay
     // Store the framebuffer before popup overwrites it
-    // Note: storeBwBuffer() will succeed for any rendered content, not just books
-    // This means if you're on home screen or other UI, it will also store the framebuffer
-    isOnBook = renderer.storeBwBuffer();
-    Serial.printf("[%lu] [SLP] Overlay mode: isOnBook=%d (from storeBwBuffer)\n", millis(), isOnBook);
+    // Check if we're on a book reader activity by checking the activity name
+    // Book reader activities are "EpubReader", "XtcReader", or "Reader" (which contains a book reader subactivity)
+    isOnBook = (previousActivityName == "EpubReader" || previousActivityName == "XtcReader" || previousActivityName == "Reader");
+    Serial.printf("[%lu] [SLP] Overlay mode: previousActivity='%s', isOnBook=%d\n", 
+                  millis(), previousActivityName.c_str(), isOnBook);
+    
+    if (isOnBook) {
+      // On a book - store the framebuffer before popup overwrites it
+      if (!renderer.storeBwBuffer()) {
+        Serial.printf("[%lu] [SLP] Failed to store BW buffer, treating as not on book\n", millis());
+        isOnBook = false;
+      }
+    }
+    
     if (!isOnBook) {
-      // Not on a book - clear screen to white before showing overlay
-      Serial.printf("[%lu] [SLP] Not on book - clearing screen to white\n", millis());
-      renderer.clearScreen();
+      // Not on a book - clear screen to black before showing overlay
+      Serial.printf("[%lu] [SLP] Not on book - clearing screen to black\n", millis());
+      renderer.clearScreen(0x00);  // 0x00 = black
     } else {
       Serial.printf("[%lu] [SLP] On book - framebuffer stored, will restore before overlay\n", millis());
     }
@@ -292,15 +302,9 @@ void SleepActivity::renderCoverSleepScreen() const {
 }
 
 void SleepActivity::renderOverlaySleepScreen() const {
-  Serial.printf("[%lu] [SLP] renderOverlaySleepScreen: isOnBook=%d\n", millis(), isOnBook);
-  // If we're on a book, restore the book content (this removes the popup from framebuffer)
-  // If not on a book, the screen is already cleared to white
   if (isOnBook) {
-    Serial.printf("[%lu] [SLP] Restoring book content framebuffer\n", millis());
     renderer.restoreBwBuffer();
   } else {
-    // Not on a book - clear screen to white so white pixels in overlay appear white
-    Serial.printf("[%lu] [SLP] Clearing screen to white (not on book)\n", millis());
     renderer.clearScreen();
   }
 
@@ -401,7 +405,7 @@ void SleepActivity::renderOverlaySleepScreen() const {
   Serial.printf("[%lu] [SLP] Overlay parsed: %dx%d, hasGreyscale=%d\n", millis(), 
                 overlay.getWidth(), overlay.getHeight(), overlay.hasGreyscale());
 
-  // Framebuffer now contains either book content (if on book) or white background (if not on book)
+  // Framebuffer now contains either book content (if on book) or black background (if not on book)
   // Calculate position to center the overlay
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
