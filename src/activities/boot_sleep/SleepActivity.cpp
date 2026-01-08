@@ -304,48 +304,71 @@ void SleepActivity::renderOverlaySleepScreen() const {
     renderer.clearScreen();
   }
 
-  // Look for sleep.bmp or sleep folder
+  // Look for sleep.bmp or sleep folder (same logic as renderCustomSleepScreen)
   FsFile overlayFile;
   bool foundOverlay = false;
   
   // First check if we have a /sleep directory
   auto dir = SdMan.open("/sleep");
   if (dir && dir.isDirectory()) {
-    std::vector<std::string> files;
-    char name[500];
-    // collect all valid BMP files
-    for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
-      if (file.isDirectory()) {
-        file.close();
-        continue;
-      }
-      file.getName(name, sizeof(name));
-      auto filename = std::string(name);
-      if (filename[0] == '.') {
-        file.close();
-        continue;
-      }
-
-      if (filename.substr(filename.length() - 4) != ".bmp") {
-        file.close();
-        continue;
-      }
-      Bitmap bitmap(file);
-      if (bitmap.parseHeaders() != BmpReaderError::Ok) {
-        file.close();
-        continue;
-      }
-      files.emplace_back(filename);
-      file.close();
-    }
-    const auto numFiles = files.size();
-    if (numFiles > 0) {
-      // Generate a random number between 0 and numFiles-1
-      const auto randomFileIndex = random(numFiles);
-      const auto filename = "/sleep/" + files[randomFileIndex];
+    // Check if a specific BMP is selected
+    if (SETTINGS.selectedSleepBmp[0] != '\0') {
+      const std::string selectedFile = std::string(SETTINGS.selectedSleepBmp);
+      const std::string filename = "/sleep/" + selectedFile;
       if (SdMan.openFileForRead("SLP", filename, overlayFile)) {
-        Serial.printf("[%lu] [SLP] Randomly loading: /sleep/%s\n", millis(), files[randomFileIndex].c_str());
-        foundOverlay = true;
+        Bitmap bitmap(overlayFile);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          Serial.printf("[%lu] [SLP] Loading selected overlay: /sleep/%s\n", millis(), selectedFile.c_str());
+          foundOverlay = true;
+        } else {
+          overlayFile.close();
+        }
+      }
+      if (!foundOverlay) {
+        Serial.printf("[%lu] [SLP] Selected overlay BMP not found or invalid, falling back to random\n", millis());
+      }
+    }
+
+    // If no selected file or it wasn't found, do random selection
+    if (!foundOverlay) {
+      std::vector<std::string> files;
+      char name[500];
+      // collect all valid BMP files
+      for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+        if (file.isDirectory()) {
+          file.close();
+          continue;
+        }
+        file.getName(name, sizeof(name));
+        auto filename = std::string(name);
+        if (filename[0] == '.') {
+          file.close();
+          continue;
+        }
+
+        if (filename.substr(filename.length() - 4) != ".bmp") {
+          Serial.printf("[%lu] [SLP] Skipping non-.bmp file name: %s\n", millis(), name);
+          file.close();
+          continue;
+        }
+        Bitmap bitmap(file);
+        if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+          Serial.printf("[%lu] [SLP] Skipping invalid BMP file: %s\n", millis(), name);
+          file.close();
+          continue;
+        }
+        files.emplace_back(filename);
+        file.close();
+      }
+      const auto numFiles = files.size();
+      if (numFiles > 0) {
+        // Generate a random number between 0 and numFiles-1
+        const auto randomFileIndex = random(numFiles);
+        const auto filename = "/sleep/" + files[randomFileIndex];
+        if (SdMan.openFileForRead("SLP", filename, overlayFile)) {
+          Serial.printf("[%lu] [SLP] Randomly loading overlay: /sleep/%s\n", millis(), files[randomFileIndex].c_str());
+          foundOverlay = true;
+        }
       }
     }
   }
@@ -354,7 +377,7 @@ void SleepActivity::renderOverlaySleepScreen() const {
   // If not found in /sleep folder, try /sleep.bmp on root
   if (!foundOverlay) {
     if (SdMan.openFileForRead("SLP", "/sleep.bmp", overlayFile)) {
-      Serial.printf("[%lu] [SLP] Loading: /sleep.bmp\n", millis());
+      Serial.printf("[%lu] [SLP] Loading overlay: /sleep.bmp\n", millis());
       foundOverlay = true;
     }
   }
