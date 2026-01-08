@@ -4,6 +4,8 @@
 class Bitmap;
 
 class SleepActivity final : public Activity {
+  bool isOnBook = false;  // Track if we're currently on a book
+
  public:
   explicit SleepActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : Activity("Sleep", renderer, mappedInput) {}
@@ -14,6 +16,7 @@ class SleepActivity final : public Activity {
   void renderDefaultSleepScreen() const;
   void renderCustomSleepScreen() const;
   void renderCoverSleepScreen() const;
+  void renderOverlaySleepScreen() const;
   void renderBitmapSleepScreen(const Bitmap& bitmap) const;
   void renderBlankSleepScreen() const;
 };
