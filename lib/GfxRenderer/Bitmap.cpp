@@ -351,6 +351,117 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   return BmpReaderError::Ok;
 }
 
+// Process a row from a pre-loaded buffer (same logic as readNextRow but without file read)
+BmpReaderError Bitmap::processRowFromBuffer(uint8_t* data, const uint8_t* rowBuffer) const {
+  // Handle Floyd-Steinberg error buffer progression
+  const bool useFS = USE_FLOYD_STEINBERG && errorCurRow && errorNextRow;
+  if (useFS) {
+    if (prevRowY != -1) {
+      // Sequential access - swap buffers
+      int16_t* temp = errorCurRow;
+      errorCurRow = errorNextRow;
+      errorNextRow = temp;
+      memset(errorNextRow, 0, (width + 2) * sizeof(int16_t));
+    }
+  }
+  prevRowY += 1;
+
+  uint8_t* outPtr = data;
+  uint8_t currentOutByte = 0;
+  int bitShift = 6;
+  int currentX = 0;
+
+  // Helper lambda to pack 2bpp color into the output stream
+  auto packPixel = [&](const uint8_t lum) {
+    uint8_t color;
+    if (useFS) {
+      // Floyd-Steinberg error diffusion
+      color = quantizeFloydSteinberg(lum, currentX, width, errorCurRow, errorNextRow, false);
+    } else {
+      // Simple quantization or noise dithering
+      color = quantize(lum, currentX, prevRowY);
+    }
+    currentOutByte |= (color << bitShift);
+    if (bitShift == 0) {
+      *outPtr++ = currentOutByte;
+      currentOutByte = 0;
+      bitShift = 6;
+    } else {
+      bitShift -= 2;
+    }
+    currentX++;
+  };
+
+  uint8_t lum;
+
+  switch (bpp) {
+    case 32: {
+      const uint8_t* p = rowBuffer;
+      for (int x = 0; x < width; x++) {
+        lum = (77u * p[2] + 150u * p[1] + 29u * p[0]) >> 8;
+        packPixel(lum);
+        p += 4;
+      }
+      break;
+    }
+    case 24: {
+      const uint8_t* p = rowBuffer;
+      for (int x = 0; x < width; x++) {
+        lum = (77u * p[2] + 150u * p[1] + 29u * p[0]) >> 8;
+        packPixel(lum);
+        p += 3;
+      }
+      break;
+    }
+    case 8: {
+      for (int x = 0; x < width; x++) {
+        packPixel(paletteLum[rowBuffer[x]]);
+      }
+      break;
+    }
+    case 2: {
+      for (int x = 0; x < width; x++) {
+        lum = paletteLum[(rowBuffer[x >> 2] >> (6 - ((x & 3) * 2))) & 0x03];
+        packPixel(lum);
+      }
+      break;
+    }
+    case 1: {
+      for (int x = 0; x < width; x++) {
+        lum = (rowBuffer[x >> 3] & (0x80 >> (x & 7))) ? 0xFF : 0x00;
+        packPixel(lum);
+      }
+      break;
+    }
+    default:
+      return BmpReaderError::UnsupportedBpp;
+  }
+
+  // Flush remaining bits if width is not a multiple of 4
+  if (bitShift != 6) *outPtr = currentOutByte;
+
+  return BmpReaderError::Ok;
+}
+
+// Read multiple rows of raw data at once from SD card
+int Bitmap::readMultipleRows(uint8_t* buffer, int maxRows) const {
+  if (maxRows <= 0 || !buffer) return 0;
+  const size_t bytesToRead = static_cast<size_t>(rowBytes) * maxRows;
+  const unsigned long readStart = millis();
+  const size_t bytesRead = file.read(buffer, bytesToRead);
+  const unsigned long readTime = millis() - readStart;
+  if (bytesRead == 0) {
+    Serial.printf("[%lu] [BMP] readMultipleRows: read 0 bytes (requested %lu bytes, %d rows)\n", 
+                  millis(), bytesToRead, maxRows);
+    return 0;
+  }
+  const int rowsRead = static_cast<int>(bytesRead / rowBytes);
+  Serial.printf("[%lu] [BMP] readMultipleRows: read %lu bytes (%d rows) in %lu ms (requested %d rows, %lu bytes)\n",
+                millis(), bytesRead, rowsRead, readTime, maxRows, bytesToRead);
+  // Return number of complete rows read
+  return rowsRead;
+}
+
 BmpReaderError Bitmap::rewindToData() const {
   if (!file.seek(bfOffBits)) {
     return BmpReaderError::SeekPixelDataFailed;

@@ -158,8 +158,6 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   bool isScaled = false;
   int cropPixX = std::floor(bitmap.getWidth() * cropX / 2.0f);
   int cropPixY = std::floor(bitmap.getHeight() * cropY / 2.0f);
-  Serial.printf("[%lu] [GFX] Cropping %dx%d by %dx%d pix, is %s\n", millis(), bitmap.getWidth(), bitmap.getHeight(),
-                cropPixX, cropPixY, bitmap.isTopDown() ? "top-down" : "bottom-up");
 
   if (maxWidth > 0 && (1.0f - cropX) * bitmap.getWidth() > maxWidth) {
     scale = static_cast<float>(maxWidth) / static_cast<float>((1.0f - cropX) * bitmap.getWidth());
@@ -169,46 +167,131 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>((1.0f - cropY) * bitmap.getHeight()));
     isScaled = true;
   }
-  Serial.printf("[%lu] [GFX] Scaling by %f - %s\n", millis(), scale, isScaled ? "scaled" : "not scaled");
 
   // Calculate output row size (2 bits per pixel, packed into bytes)
   // IMPORTANT: Use int, not uint8_t, to avoid overflow for images > 1020 pixels wide
   const int outputRowSize = (bitmap.getWidth() + 3) / 4;
+  const int rowBytes = bitmap.getRowBytes();
+  
+  // Try large buffer first (64 rows), fall back to smaller if needed
+  int ROWS_PER_READ = 64;
   auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
-  auto* rowBytes = static_cast<uint8_t*>(malloc(bitmap.getRowBytes()));
+  auto* multiRowBuffer = static_cast<uint8_t*>(malloc(rowBytes * ROWS_PER_READ));
 
-  if (!outputRow || !rowBytes) {
-    Serial.printf("[%lu] [GFX] !! Failed to allocate BMP row buffers\n", millis());
+  // If large buffer fails, try smaller buffers (16, 8, 4, 1 rows)
+  if (!outputRow || !multiRowBuffer) {
     free(outputRow);
-    free(rowBytes);
-    return;
+    free(multiRowBuffer);
+    
+    // Try progressively smaller buffers
+    const int fallbackSizes[] = {16, 8, 4, 1};
+    bool allocated = false;
+    for (int fallbackSize : fallbackSizes) {
+      outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
+      multiRowBuffer = static_cast<uint8_t*>(malloc(rowBytes * fallbackSize));
+      if (outputRow && multiRowBuffer) {
+        ROWS_PER_READ = fallbackSize;
+        allocated = true;
+        break;
+      }
+      free(outputRow);
+      free(multiRowBuffer);
+    }
+    
+    if (!allocated) {
+      return;
+    }
   }
 
-  for (int bmpY = 0; bmpY < (bitmap.getHeight() - cropPixY); bmpY++) {
+  const int totalRows = bitmap.getHeight() - cropPixY;
+  int bmpY = 0;
+  
+  while (bmpY < totalRows) {
+    // Calculate how many rows to read in this batch (up to ROWS_PER_READ)
+    const int rowsToRead = std::min(ROWS_PER_READ, totalRows - bmpY);
+    
+    const int rowsRead = bitmap.readMultipleRows(multiRowBuffer, rowsToRead);
+    
+    if (rowsRead <= 0) {
+      break;
+    }
+    
+    // Process each row from the batch buffer
+    for (int batchRow = 0; batchRow < rowsRead; batchRow++) {
+      const int currentBmpY = bmpY + batchRow;
+      
+      // Process this row from the raw buffer
+      const uint8_t* rawRowBuffer = multiRowBuffer + (batchRow * rowBytes);
+      if (bitmap.processRowFromBuffer(outputRow, rawRowBuffer) != BmpReaderError::Ok) {
+        continue;
+      }
+      
     // The BMP's (0, 0) is the bottom-left corner (if the height is positive, top-left if negative).
     // Screen's (0, 0) is the top-left corner.
-    int screenY = -cropPixY + (bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY);
+      int screenY = -cropPixY + (bitmap.isTopDown() ? currentBmpY : bitmap.getHeight() - 1 - currentBmpY);
     if (isScaled) {
       screenY = std::floor(screenY * scale);
     }
     screenY += y;  // the offset should not be scaled
     if (screenY >= getScreenHeight()) {
+        bmpY = totalRows;  // Exit outer loop
       break;
     }
 
-    if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
-      Serial.printf("[%lu] [GFX] Failed to read row %d from bitmap\n", millis(), bmpY);
-      free(outputRow);
-      free(rowBytes);
-      return;
-    }
-
-    if (bmpY < cropPixY) {
+      if (currentBmpY < cropPixY) {
       // Skip the row if it's outside the crop area
       continue;
     }
 
-    for (int bmpX = cropPixX; bmpX < bitmap.getWidth() - cropPixX; bmpX++) {
+      // Optimized: Get framebuffer pointer once and write directly
+      uint8_t* frameBuffer = einkDisplay.getFrameBuffer();
+      if (!frameBuffer) continue;
+
+      // Optimized: Calculate rotation once per row based on orientation
+      // This avoids calling rotateCoordinates for every pixel (saves 610ms!)
+      int rotatedX_base = 0;
+      int rotatedY_base = 0;
+      int xOffset = 0;
+      int yOffset = 0;
+      
+      // Calculate rotation formula based on orientation
+      switch (orientation) {
+        case Portrait: {
+          // rotatedX = screenY (constant), rotatedY = DISPLAY_HEIGHT - 1 - screenX
+          rotatedX_base = screenY;
+          rotatedY_base = EInkDisplay::DISPLAY_HEIGHT - 1;
+          xOffset = 0;   // rotatedX is constant
+          yOffset = -1;  // rotatedY decreases as screenX increases
+          break;
+        }
+        case LandscapeClockwise: {
+          // rotatedX = DISPLAY_WIDTH - 1 - screenX, rotatedY = DISPLAY_HEIGHT - 1 - screenY
+          rotatedX_base = EInkDisplay::DISPLAY_WIDTH - 1;
+          rotatedY_base = EInkDisplay::DISPLAY_HEIGHT - 1 - screenY;
+          xOffset = -1;  // rotatedX decreases as screenX increases
+          yOffset = 0;   // rotatedY is constant
+          break;
+        }
+        case PortraitInverted: {
+          // rotatedX = DISPLAY_WIDTH - 1 - screenY, rotatedY = screenX
+          rotatedX_base = EInkDisplay::DISPLAY_WIDTH - 1 - screenY;
+          rotatedY_base = 0;
+          xOffset = 0;   // rotatedX is constant
+          yOffset = 1;   // rotatedY increases as screenX increases
+          break;
+        }
+        case LandscapeCounterClockwise: {
+          // rotatedX = screenX, rotatedY = screenY (no rotation)
+          rotatedX_base = 0;
+          rotatedY_base = screenY;
+          xOffset = 1;   // rotatedX increases as screenX increases
+          yOffset = 0;   // rotatedY is constant
+          break;
+        }
+      }
+
+      // Process pixels from the processed row data
+      for (int bmpX = cropPixX; bmpX < bitmap.getWidth() - cropPixX; bmpX++) {
       int screenX = bmpX - cropPixX;
       if (isScaled) {
         screenX = std::floor(screenX * scale);
@@ -220,18 +303,376 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
 
-      if (renderMode == BW && val < 3) {
-        drawPixel(screenX, screenY);
-      } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
-        drawPixel(screenX, screenY, false);
-      } else if (renderMode == GRAYSCALE_LSB && val == 1) {
-        drawPixel(screenX, screenY, false);
+        // Optimized: Calculate rotated coordinates without function call
+        int rotatedX = rotatedX_base + (xOffset * screenX);
+        int rotatedY = rotatedY_base + (yOffset * screenX);
+
+        // Bounds check
+        if (rotatedX < 0 || rotatedX >= EInkDisplay::DISPLAY_WIDTH || rotatedY < 0 ||
+            rotatedY >= EInkDisplay::DISPLAY_HEIGHT) {
+          continue;
+        }
+
+        // Calculate byte position and bit position
+        const uint16_t byteIndex = rotatedY * EInkDisplay::DISPLAY_WIDTH_BYTES + (rotatedX / 8);
+        const uint8_t bitPosition = 7 - (rotatedX % 8);  // MSB first
+
+        // Write directly to framebuffer (avoiding drawPixel overhead)
+        if (renderMode == BW && val < 3) {
+          frameBuffer[byteIndex] &= ~(1 << bitPosition);  // Clear bit (black)
+        } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+          frameBuffer[byteIndex] |= 1 << bitPosition;  // Set bit (mark for grayscale)
+        } else if (renderMode == GRAYSCALE_LSB && val == 1) {
+          frameBuffer[byteIndex] |= 1 << bitPosition;  // Set bit (mark for dark gray)
+        }
       }
     }
+    
+    bmpY += rowsRead;
   }
 
   free(outputRow);
-  free(rowBytes);
+  free(multiRowBuffer);
+}
+
+uint8_t* GfxRenderer::cacheBitmap(const Bitmap& bitmap, int* outWidth, int* outHeight, int* outRowSize) const {
+  const int width = bitmap.getWidth();
+  const int height = bitmap.getHeight();
+  const int rowBytes = bitmap.getRowBytes();
+  const int outputRowSize = (width + 3) / 4;  // 2 bits per pixel, packed into bytes
+  
+  const size_t cacheSize = static_cast<size_t>(outputRowSize) * height;
+  
+  // Allocate cache buffer FIRST (when we have the most contiguous memory)
+  // This avoids fragmentation from temp buffer allocation
+  uint8_t* cachedData = static_cast<uint8_t*>(malloc(cacheSize));
+  if (!cachedData) {
+    return nullptr;
+  }
+  
+  // Now allocate minimal temp buffers (single row only to reduce memory pressure)
+  // After cache allocation, we have less contiguous memory, so use row-by-row reading
+  auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
+  auto* singleRowBuffer = static_cast<uint8_t*>(malloc(rowBytes));  // Only one row buffer (~1.4KB)
+  
+  if (!outputRow || !singleRowBuffer) {
+    free(cachedData);  // Free cache since we can't use it
+    free(outputRow);
+    free(singleRowBuffer);
+    return nullptr;
+  }
+  
+  // Rewind to start of pixel data
+  if (bitmap.rewindToData() != BmpReaderError::Ok) {
+    free(cachedData);
+    free(outputRow);
+    free(singleRowBuffer);
+    return nullptr;
+  }
+  
+  // Read and process all rows one at a time (minimal memory usage)
+  bool cacheSuccess = true;
+  for (int bmpY = 0; bmpY < height; bmpY++) {
+    // Read one row at a time using readNextRow (which handles row buffer internally)
+    if (bitmap.readNextRow(outputRow, singleRowBuffer) != BmpReaderError::Ok) {
+      cacheSuccess = false;
+      break;
+    }
+    
+    // Store processed row in cache
+    uint8_t* cacheRow = cachedData + (bmpY * outputRowSize);
+    memcpy(cacheRow, outputRow, outputRowSize);
+  }
+  
+  // Clean up temporary buffers
+  free(outputRow);
+  free(singleRowBuffer);
+  
+  if (!cacheSuccess) {
+    free(cachedData);
+    return nullptr;
+  }
+  
+  *outWidth = width;
+  *outHeight = height;
+  *outRowSize = outputRowSize;
+  return cachedData;
+}
+
+void GfxRenderer::drawCachedBitmap(const uint8_t* cachedData, int cachedWidth, int cachedHeight, int cachedRowSize,
+                                   int x, int y, int maxWidth, int maxHeight, float cropX, float cropY, bool isTopDown) const {
+  if (!cachedData) {
+    return;
+  }
+  
+  float scale = 1.0f;
+  bool isScaled = false;
+  int cropPixX = std::floor(cachedWidth * cropX / 2.0f);
+  int cropPixY = std::floor(cachedHeight * cropY / 2.0f);
+  
+  if (maxWidth > 0 && (1.0f - cropX) * cachedWidth > maxWidth) {
+    scale = static_cast<float>(maxWidth) / static_cast<float>((1.0f - cropX) * cachedWidth);
+    isScaled = true;
+  }
+  if (maxHeight > 0 && (1.0f - cropY) * cachedHeight > maxHeight) {
+    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>((1.0f - cropY) * cachedHeight));
+    isScaled = true;
+  }
+  
+  const int totalRows = cachedHeight - cropPixY;
+  uint8_t* frameBuffer = einkDisplay.getFrameBuffer();
+  if (!frameBuffer) return;
+  
+  // Process each row from cache (no SD card reads!)
+  for (int bmpY = cropPixY; bmpY < cachedHeight; bmpY++) {
+    // Get cached row data
+    const uint8_t* cachedRow = cachedData + (bmpY * cachedRowSize);
+    
+    // Fast row-level check: skip entire row if it contains no pixels we need
+    if (renderMode == GRAYSCALE_LSB || renderMode == GRAYSCALE_MSB) {
+      bool rowHasNeededPixels = false;
+      const int rowBytes = cachedRowSize;
+      
+      // Quick scan: check if any byte contains pixels we need
+      for (int byteIdx = 0; byteIdx < rowBytes; byteIdx++) {
+        const uint8_t packedByte = cachedRow[byteIdx];
+        
+        if (renderMode == GRAYSCALE_LSB) {
+          // Need val == 1 (binary 01 = 0b01)
+          // Check all 4 pixel values in the byte
+          if ((packedByte & 0xC0) == 0x40 ||  // val0 == 01 (bits 7-6: 01)
+              (packedByte & 0x30) == 0x10 ||  // val1 == 01 (bits 5-4: 01)
+              (packedByte & 0x0C) == 0x04 ||  // val2 == 01 (bits 3-2: 01)
+              (packedByte & 0x03) == 0x01) {  // val3 == 01 (bits 1-0: 01)
+            rowHasNeededPixels = true;
+            break;
+          }
+        } else if (renderMode == GRAYSCALE_MSB) {
+          // Need val == 1 (01) or val == 2 (10)
+          // Check all 4 pixel values in the byte
+          const uint8_t val0 = (packedByte >> 6) & 0x3;
+          const uint8_t val1 = (packedByte >> 4) & 0x3;
+          const uint8_t val2 = (packedByte >> 2) & 0x3;
+          const uint8_t val3 = packedByte & 0x3;
+          
+          if (val0 == 1 || val0 == 2 || val1 == 1 || val1 == 2 ||
+              val2 == 1 || val2 == 2 || val3 == 1 || val3 == 2) {
+            rowHasNeededPixels = true;
+            break;
+          }
+        }
+      }
+      
+      if (!rowHasNeededPixels) {
+        continue;  // Skip entire row - no pixels we need here
+      }
+    }
+    
+    // Calculate screen Y coordinate (reverse for bottom-up bitmaps, same as drawBitmap)
+    int screenY = -cropPixY + (isTopDown ? bmpY : cachedHeight - 1 - bmpY);
+    if (isScaled) {
+      screenY = std::floor(screenY * scale);
+    }
+    screenY += y;
+    if (screenY >= getScreenHeight()) {
+      break;
+    }
+    
+    // Calculate rotation base values for this row
+    int rotatedX_base = 0;
+    int rotatedY_base = 0;
+    int xOffset = 0;
+    int yOffset = 0;
+    
+    switch (orientation) {
+      case Portrait: {
+        rotatedX_base = screenY;
+        rotatedY_base = EInkDisplay::DISPLAY_HEIGHT - 1;
+        xOffset = 0;
+        yOffset = -1;
+        break;
+      }
+      case LandscapeClockwise: {
+        rotatedX_base = EInkDisplay::DISPLAY_WIDTH - 1;
+        rotatedY_base = EInkDisplay::DISPLAY_HEIGHT - 1 - screenY;
+        xOffset = -1;
+        yOffset = 0;
+        break;
+      }
+      case PortraitInverted: {
+        rotatedX_base = EInkDisplay::DISPLAY_WIDTH - 1 - screenY;
+        rotatedY_base = 0;
+        xOffset = 0;
+        yOffset = 1;
+        break;
+      }
+      case LandscapeCounterClockwise: {
+        rotatedX_base = 0;
+        rotatedY_base = screenY;
+        xOffset = 1;
+        yOffset = 0;
+        break;
+      }
+    }
+    
+    // Process pixels from cached row - optimized to process 4 pixels at a time
+    const int rowStartX = cropPixX;
+    const int rowEndX = cachedWidth - cropPixX;
+    
+    // Align start to byte boundary for 4-pixel processing
+    int bmpX = rowStartX;
+    const int byteStart = bmpX / 4;
+    const int pixelOffsetInByte = bmpX % 4;
+    
+    // Process any leading pixels that don't align to byte boundary
+    for (int i = 0; i < pixelOffsetInByte && bmpX < rowEndX; i++, bmpX++) {
+      int screenX = bmpX - cropPixX;
+      if (isScaled) {
+        screenX = std::floor(screenX * scale);
+      }
+      screenX += x;
+      if (screenX >= getScreenWidth()) {
+        bmpX = rowEndX;  // Exit
+        break;
+      }
+      
+      const uint8_t packedByte = cachedRow[bmpX / 4];
+      const uint8_t val = (packedByte >> (6 - ((bmpX * 2) % 8))) & 0x3;
+      
+      // Early skip if pixel value doesn't match render mode
+      if (renderMode == GRAYSCALE_LSB && val != 1) continue;
+      if (renderMode == GRAYSCALE_MSB && val != 1 && val != 2) continue;
+      if (renderMode == BW && val == 3) continue;
+      
+      int rotatedX = rotatedX_base + (xOffset * screenX);
+      int rotatedY = rotatedY_base + (yOffset * screenX);
+      
+      if (rotatedX < 0 || rotatedX >= EInkDisplay::DISPLAY_WIDTH || rotatedY < 0 ||
+          rotatedY >= EInkDisplay::DISPLAY_HEIGHT) {
+        continue;
+      }
+      
+      const uint16_t byteIndex = rotatedY * EInkDisplay::DISPLAY_WIDTH_BYTES + (rotatedX / 8);
+      const uint8_t bitPosition = 7 - (rotatedX % 8);
+      
+      if (renderMode == BW && val < 3) {
+        frameBuffer[byteIndex] &= ~(1 << bitPosition);
+      } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+        frameBuffer[byteIndex] |= 1 << bitPosition;
+      } else if (renderMode == GRAYSCALE_LSB && val == 1) {
+        frameBuffer[byteIndex] |= 1 << bitPosition;
+      }
+    }
+    
+    // Process 4 pixels at a time (one byte) for the aligned portion
+    for (int byteIdx = byteStart + (pixelOffsetInByte > 0 ? 1 : 0); bmpX + 3 < rowEndX; byteIdx++, bmpX += 4) {
+      const uint8_t packedByte = cachedRow[byteIdx];
+      
+      // Fast byte-level check: skip entire byte if it contains no pixels we need
+      if (renderMode == GRAYSCALE_LSB) {
+        // For LSB, we only need val == 1 (binary 01)
+        // Check if byte contains any 01 patterns: (packedByte & 0xAA) == 0xAA means all bits set, but we need 01
+        // Better: check if any of the 2-bit pairs is 01 (0b01 = 1)
+        // 01 pattern: bit7=0, bit6=1 OR bit5=0, bit4=1 OR bit3=0, bit2=1 OR bit1=0, bit0=1
+        // This is complex, so just extract and check
+      } else if (renderMode == GRAYSCALE_MSB) {
+        // For MSB, we need val == 1 (01) or val == 2 (10)
+        // 01 = 0b01, 10 = 0b10
+        // If byte is 0x00 or 0xFF, skip (but 0xFF = all 11, which is white, so skip)
+        if (packedByte == 0xFF) continue;  // All white pixels, skip
+      } else if (renderMode == BW) {
+        // For BW, we need val < 3 (not white)
+        // If byte is 0xFF, all white, skip
+        if (packedByte == 0xFF) continue;  // All white pixels, skip
+      }
+      
+      // Extract all 4 pixel values at once
+      const uint8_t val0 = (packedByte >> 6) & 0x3;
+      const uint8_t val1 = (packedByte >> 4) & 0x3;
+      const uint8_t val2 = (packedByte >> 2) & 0x3;
+      const uint8_t val3 = packedByte & 0x3;
+      
+      // Process each of the 4 pixels
+      for (int i = 0; i < 4; i++) {
+        const uint8_t val = (i == 0) ? val0 : (i == 1) ? val1 : (i == 2) ? val2 : val3;
+        
+        // Early skip if pixel value doesn't match render mode
+        if (renderMode == GRAYSCALE_LSB && val != 1) continue;
+        if (renderMode == GRAYSCALE_MSB && val != 1 && val != 2) continue;
+        if (renderMode == BW && val == 3) continue;
+        
+        int screenX = (bmpX + i) - cropPixX;
+        if (isScaled) {
+          screenX = std::floor(screenX * scale);
+        }
+        screenX += x;
+        if (screenX >= getScreenWidth()) {
+          bmpX = rowEndX;  // Exit outer loop
+          break;
+        }
+        
+        int rotatedX = rotatedX_base + (xOffset * screenX);
+        int rotatedY = rotatedY_base + (yOffset * screenX);
+        
+        if (rotatedX < 0 || rotatedX >= EInkDisplay::DISPLAY_WIDTH || rotatedY < 0 ||
+            rotatedY >= EInkDisplay::DISPLAY_HEIGHT) {
+          continue;
+        }
+        
+        const uint16_t byteIndex = rotatedY * EInkDisplay::DISPLAY_WIDTH_BYTES + (rotatedX / 8);
+        const uint8_t bitPosition = 7 - (rotatedX % 8);
+        
+        if (renderMode == BW && val < 3) {
+          frameBuffer[byteIndex] &= ~(1 << bitPosition);
+        } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+          frameBuffer[byteIndex] |= 1 << bitPosition;
+        } else if (renderMode == GRAYSCALE_LSB && val == 1) {
+          frameBuffer[byteIndex] |= 1 << bitPosition;
+        }
+      }
+      
+      if (bmpX >= rowEndX) break;
+    }
+    
+    // Process any trailing pixels
+    for (; bmpX < rowEndX; bmpX++) {
+      int screenX = bmpX - cropPixX;
+      if (isScaled) {
+        screenX = std::floor(screenX * scale);
+      }
+      screenX += x;
+      if (screenX >= getScreenWidth()) {
+        break;
+      }
+      
+      const uint8_t packedByte = cachedRow[bmpX / 4];
+      const uint8_t val = (packedByte >> (6 - ((bmpX * 2) % 8))) & 0x3;
+      
+      // Early skip if pixel value doesn't match render mode
+      if (renderMode == GRAYSCALE_LSB && val != 1) continue;
+      if (renderMode == GRAYSCALE_MSB && val != 1 && val != 2) continue;
+      if (renderMode == BW && val == 3) continue;
+      
+      int rotatedX = rotatedX_base + (xOffset * screenX);
+      int rotatedY = rotatedY_base + (yOffset * screenX);
+      
+      if (rotatedX < 0 || rotatedX >= EInkDisplay::DISPLAY_WIDTH || rotatedY < 0 ||
+          rotatedY >= EInkDisplay::DISPLAY_HEIGHT) {
+        continue;
+      }
+      
+      const uint16_t byteIndex = rotatedY * EInkDisplay::DISPLAY_WIDTH_BYTES + (rotatedX / 8);
+      const uint8_t bitPosition = 7 - (rotatedX % 8);
+      
+      if (renderMode == BW && val < 3) {
+        frameBuffer[byteIndex] &= ~(1 << bitPosition);
+      } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+        frameBuffer[byteIndex] |= 1 << bitPosition;
+      } else if (renderMode == GRAYSCALE_LSB && val == 1) {
+        frameBuffer[byteIndex] |= 1 << bitPosition;
+      }
+    }
+  }
 }
 
 void GfxRenderer::clearScreen(const uint8_t color) const { einkDisplay.clearScreen(color); }
@@ -591,6 +1032,11 @@ void GfxRenderer::restoreBwBuffer() {
 
   freeBwBufferChunks();
   Serial.printf("[%lu] [GFX] Restored and freed BW buffer chunks\n", millis());
+}
+
+void GfxRenderer::freeBwBuffer() {
+  freeBwBufferChunks();
+  Serial.printf("[%lu] [GFX] Freed BW buffer chunks (48KB freed)\n", millis());
 }
 
 /**

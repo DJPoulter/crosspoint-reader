@@ -32,6 +32,8 @@ class Bitmap {
   ~Bitmap();
   BmpReaderError parseHeaders();
   BmpReaderError readNextRow(uint8_t* data, uint8_t* rowBuffer) const;
+  BmpReaderError processRowFromBuffer(uint8_t* data, const uint8_t* rowBuffer) const;
+  int readMultipleRows(uint8_t* buffer, int maxRows) const;
   BmpReaderError rewindToData() const;
   int getWidth() const { return width; }
   int getHeight() const { return height; }
