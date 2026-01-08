@@ -1,5 +1,7 @@
 #include "SleepActivity.h"
 
+#include <cstdlib>
+
 #include <Epub.h>
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
@@ -13,6 +15,26 @@
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY) {
+    Serial.printf("[%lu] [SLP] Entering overlay sleep mode\n", millis());
+    // For overlay mode: store framebuffer (book content), show popup, then restore and draw overlay
+    // Store the framebuffer before popup overwrites it
+    // Note: storeBwBuffer() will succeed for any rendered content, not just books
+    // This means if you're on home screen or other UI, it will also store the framebuffer
+    isOnBook = renderer.storeBwBuffer();
+    Serial.printf("[%lu] [SLP] Overlay mode: isOnBook=%d (from storeBwBuffer)\n", millis(), isOnBook);
+    if (!isOnBook) {
+      // Not on a book - clear screen to white before showing overlay
+      Serial.printf("[%lu] [SLP] Not on book - clearing screen to white\n", millis());
+      renderer.clearScreen();
+    } else {
+      Serial.printf("[%lu] [SLP] On book - framebuffer stored, will restore before overlay\n", millis());
+    }
+    renderPopup("Entering Sleep...");
+    return renderOverlaySleepScreen();
+  }
+
   renderPopup("Entering Sleep...");
 
   if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::BLANK) {
@@ -243,6 +265,165 @@ void SleepActivity::renderCoverSleepScreen() const {
   }
 
   renderDefaultSleepScreen();
+}
+
+void SleepActivity::renderOverlaySleepScreen() const {
+  Serial.printf("[%lu] [SLP] renderOverlaySleepScreen: isOnBook=%d\n", millis(), isOnBook);
+  // If we're on a book, restore the book content (this removes the popup from framebuffer)
+  // If not on a book, the screen is already cleared to white
+  if (isOnBook) {
+    Serial.printf("[%lu] [SLP] Restoring book content framebuffer\n", millis());
+    renderer.restoreBwBuffer();
+  } else {
+    // Not on a book - clear screen to white so white pixels in overlay appear white
+    Serial.printf("[%lu] [SLP] Clearing screen to white (not on book)\n", millis());
+    renderer.clearScreen();
+  }
+
+  // Look for overlay.bmp on the root of the SD card
+  Serial.printf("[%lu] [SLP] Opening overlay.bmp file\n", millis());
+  FsFile overlayFile;
+  if (!SdMan.openFileForRead("SLP", "/overlay.bmp", overlayFile)) {
+    Serial.printf("[%lu] [SLP] ERROR: Failed to open /overlay.bmp, falling back to default sleep screen\n", millis());
+    renderDefaultSleepScreen();
+    return;
+  }
+  Serial.printf("[%lu] [SLP] Successfully opened overlay.bmp\n", millis());
+
+  Bitmap overlay(overlayFile);
+  const BmpReaderError overlayError = overlay.parseHeaders();
+  if (overlayError != BmpReaderError::Ok) {
+    Serial.printf("[%lu] [SLP] ERROR: Failed to parse overlay.bmp headers (error=%d), falling back to default\n", 
+                  millis(), static_cast<int>(overlayError));
+    overlayFile.close();
+    renderDefaultSleepScreen();
+    return;
+  }
+  Serial.printf("[%lu] [SLP] Overlay parsed: %dx%d, hasGreyscale=%d\n", millis(), 
+                overlay.getWidth(), overlay.getHeight(), overlay.hasGreyscale());
+
+  // Framebuffer now contains either book content (if on book) or white background (if not on book)
+  // Calculate position to center the overlay
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  int x = (pageWidth - overlay.getWidth()) / 2;
+  int y = (pageHeight - overlay.getHeight()) / 2;
+
+  // Ensure coordinates are non-negative
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  Serial.printf("[%lu] [SLP] Overlay position: x=%d, y=%d (screen: %dx%d)\n", millis(), 
+                x, y, pageWidth, pageHeight);
+
+  // Cache the bitmap once to avoid reading from SD card 4 times
+  // Free BW buffer first to free up 48KB RAM for caching
+  Serial.printf("[%lu] [SLP] Freeing BW buffer to make room for overlay cache\n", millis());
+  renderer.freeBwBuffer();  // Free 48KB - we don't need to restore since we're going to sleep
+  
+  Serial.printf("[%lu] [SLP] Attempting to cache overlay bitmap\n", millis());
+  int cachedWidth, cachedHeight, cachedRowSize;
+  uint8_t* cachedOverlay = renderer.cacheBitmap(overlay, &cachedWidth, &cachedHeight, &cachedRowSize);
+  if (!cachedOverlay) {
+    Serial.printf("[%lu] [SLP] Cache failed - will draw overlay directly from file (slower)\n", millis());
+    // Keep file open - don't close it yet, bitmap needs it
+    // Rewind bitmap to start of pixel data for first draw
+    if (overlay.rewindToData() != BmpReaderError::Ok) {
+      overlayFile.close();
+      renderDefaultSleepScreen();
+      return;
+    }
+    Serial.printf("[%lu] [SLP] Drawing BW overlay from file\n", millis());
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+    if (overlay.hasGreyscale()) {
+      Serial.printf("[%lu] [SLP] Overlay has grayscale - displaying BW first, then grayscale passes\n", millis());
+      renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
+      renderer.storeBwBuffer();
+      if (overlay.rewindToData() != BmpReaderError::Ok) {
+        overlayFile.close();
+        return;
+      }
+      renderer.clearScreen(0x00);
+      renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+      renderer.copyGrayscaleLsbBuffers();
+      if (overlay.rewindToData() != BmpReaderError::Ok) {
+        overlayFile.close();
+        return;
+      }
+      renderer.clearScreen(0x00);
+      renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+      renderer.copyGrayscaleMsbBuffers();
+      renderer.displayGrayBuffer();
+      renderer.setRenderMode(GfxRenderer::BW);
+      // Don't restore BW buffer - we freed it for caching, and we're going to sleep anyway
+      // Just re-draw the overlay on the current framebuffer (which has book + overlay from grayscale)
+      if (overlay.rewindToData() != BmpReaderError::Ok) {
+        overlayFile.close();
+        return;
+      }
+      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+      renderer.cleanupGrayscaleWithFrameBuffer();
+      Serial.printf("[%lu] [SLP] Completed grayscale overlay rendering from file\n", millis());
+    } else {
+      Serial.printf("[%lu] [SLP] Displaying BW overlay (no grayscale)\n", millis());
+      renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
+    }
+    overlayFile.close();
+    Serial.printf("[%lu] [SLP] Overlay rendering complete (from file)\n", millis());
+    return;
+  }
+  
+  Serial.printf("[%lu] [SLP] Overlay cached successfully: %dx%d, rowSize=%d\n", millis(), 
+                cachedWidth, cachedHeight, cachedRowSize);
+  // Draw BW overlay from cache (no SD reads!)
+  Serial.printf("[%lu] [SLP] Drawing BW overlay from cache\n", millis());
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.drawCachedBitmap(cachedOverlay, cachedWidth, cachedHeight, cachedRowSize, x, y, pageWidth, pageHeight, 0, 0, overlay.isTopDown());
+
+  // If overlay has grayscale, display BW first, then apply grayscale
+  if (overlay.hasGreyscale()) {
+    Serial.printf("[%lu] [SLP] Overlay has grayscale - displaying BW first, then grayscale passes\n", millis());
+    // Display BW overlay with half refresh
+    renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
+    
+    // Store BW buffer (book + overlay) before clearing for grayscale passes
+    renderer.storeBwBuffer();
+    
+    // Do LSB grayscale pass from cache (no SD reads!)
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+    renderer.drawCachedBitmap(cachedOverlay, cachedWidth, cachedHeight, cachedRowSize, x, y, pageWidth, pageHeight, 0, 0, overlay.isTopDown());
+    renderer.copyGrayscaleLsbBuffers();
+
+    // Do MSB grayscale pass from cache (no SD reads!)
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+    renderer.drawCachedBitmap(cachedOverlay, cachedWidth, cachedHeight, cachedRowSize, x, y, pageWidth, pageHeight, 0, 0, overlay.isTopDown());
+    renderer.copyGrayscaleMsbBuffers();
+
+    // Apply grayscale LUT (this happens immediately after BW, so it looks like one refresh)
+    renderer.displayGrayBuffer();
+    
+    renderer.setRenderMode(GfxRenderer::BW);
+    
+    // Don't restore BW buffer - we freed it for caching, and we're going to sleep anyway
+    // Just re-draw the overlay from cache on the current framebuffer (which has book + overlay from grayscale)
+    renderer.drawCachedBitmap(cachedOverlay, cachedWidth, cachedHeight, cachedRowSize, x, y, pageWidth, pageHeight, 0, 0, overlay.isTopDown());
+    renderer.cleanupGrayscaleWithFrameBuffer();
+    Serial.printf("[%lu] [SLP] Completed grayscale overlay rendering from cache\n", millis());
+  } else {
+    // No grayscale - just display BW overlay
+    Serial.printf("[%lu] [SLP] Displaying BW overlay (no grayscale)\n", millis());
+    renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
+  }
+
+  // Free cached overlay data
+  Serial.printf("[%lu] [SLP] Freeing cached overlay data\n", millis());
+  free(cachedOverlay);
+  overlayFile.close();
+  Serial.printf("[%lu] [SLP] Overlay rendering complete (from cache)\n", millis());
 }
 
 void SleepActivity::renderBlankSleepScreen() const {
