@@ -194,8 +194,10 @@ void waitForPowerRelease() {
 
 // Enter deep sleep mode
 void enterDeepSleep() {
+  // Get the current activity name before exiting
+  std::string prevActivityName = currentActivity ? currentActivity->name : "";
   exitActivity();
-  enterNewActivity(new SleepActivity(renderer, mappedInputManager));
+  enterNewActivity(new SleepActivity(renderer, mappedInputManager, prevActivityName));
 
   einkDisplay.deepSleep();
   Serial.printf("[%lu] [   ] Power button press calibration value: %lu ms\n", millis(), t2 - t1);
