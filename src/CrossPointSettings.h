@@ -16,7 +16,7 @@ class CrossPointSettings {
   CrossPointSettings& operator=(const CrossPointSettings&) = delete;
 
   // Should match with SettingsActivity text
-  enum SLEEP_SCREEN_MODE { DARK = 0, LIGHT = 1, CUSTOM = 2, COVER = 3, BLANK = 4 };
+  enum SLEEP_SCREEN_MODE { DARK = 0, LIGHT = 1, CUSTOM = 2, COVER = 3, BLANK = 4, OVERLAY = 5 };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1 };
 
   // Status bar display type enum
@@ -82,6 +82,8 @@ class CrossPointSettings {
   uint8_t screenMargin = 5;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
+  // Resume to book on boot (if was on book when sleeping)
+  uint8_t resumeOnBoot = 1;  // Default to enabled (1 = true, 0 = false)
 
   ~CrossPointSettings() = default;
 

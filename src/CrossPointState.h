@@ -8,6 +8,7 @@ class CrossPointState {
 
  public:
   std::string openEpubPath;
+  bool wasOnBook = false;  // Track if we were on a book when we went to sleep
   ~CrossPointState() = default;
 
   // Get singleton instance

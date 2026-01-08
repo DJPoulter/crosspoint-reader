@@ -192,8 +192,31 @@ void waitForPowerRelease() {
   }
 }
 
+// Helper function to check if we're currently on a book reader activity
+static bool isOnBookReader() {
+  if (!currentActivity) {
+    Serial.printf("[%lu] [   ] isOnBookReader: no current activity\n", millis());
+    return false;
+  }
+  const std::string& activityName = currentActivity->getName();
+  // Check if we're on a reader activity (Reader, EpubReader, or XtcReader)
+  const bool isOnBook = activityName == "Reader" || activityName == "EpubReader" || activityName == "XtcReader";
+  Serial.printf("[%lu] [   ] isOnBookReader: activity='%s', result=%d\n", millis(), activityName.c_str(), isOnBook);
+  return isOnBook;
+}
+
 // Enter deep sleep mode
 void enterDeepSleep() {
+  // Track if we were on a book when entering sleep
+  APP_STATE.wasOnBook = isOnBookReader();
+  Serial.printf("[%lu] [   ] enterDeepSleep: wasOnBook=%d, openEpubPath='%s'\n", millis(), 
+                APP_STATE.wasOnBook, APP_STATE.openEpubPath.c_str());
+  if (!APP_STATE.saveToFile()) {
+    Serial.printf("[%lu] [   ] enterDeepSleep: WARNING - failed to save state\n", millis());
+  } else {
+    Serial.printf("[%lu] [   ] enterDeepSleep: state saved successfully\n", millis());
+  }
+  
   exitActivity();
   enterNewActivity(new SleepActivity(renderer, mappedInputManager));
 
@@ -293,18 +316,49 @@ void setup() {
 
   setupDisplayAndFonts();
 
-  exitActivity();
-  enterNewActivity(new BootActivity(renderer, mappedInputManager));
-
   APP_STATE.loadFromFile();
-  if (APP_STATE.openEpubPath.empty()) {
-    onGoHome();
-  } else {
+  Serial.printf("[%lu] [   ] Boot: loaded state - wasOnBook=%d, openEpubPath='%s'\n", millis(), 
+                APP_STATE.wasOnBook, APP_STATE.openEpubPath.c_str());
+  
+  // Logic:
+  // - If on book (wasOnBook=true): Always resume to book (regardless of setting)
+  // - If on home screen (wasOnBook=false): 
+  //   - If resumeOnBoot is ON: Resume to book
+  //   - If resumeOnBoot is OFF: Stay on home screen
+  const bool shouldResumeDirectlyToBook = (APP_STATE.wasOnBook || SETTINGS.resumeOnBoot) && !APP_STATE.openEpubPath.empty();
+  Serial.printf("[%lu] [   ] Boot: shouldResumeDirectlyToBook=%d (wasOnBook=%d, resumeOnBoot=%d, hasPath=%d)\n", millis(), 
+                shouldResumeDirectlyToBook, APP_STATE.wasOnBook, SETTINGS.resumeOnBoot, !APP_STATE.openEpubPath.empty());
+  
+  // Clear the wasOnBook flag after checking it and save state
+  APP_STATE.wasOnBook = false;
+  if (!APP_STATE.saveToFile()) {
+    Serial.printf("[%lu] [   ] Boot: WARNING - failed to save cleared state\n", millis());
+  }
+  
+  // Skip boot screen if overlay sleep mode is enabled and we should resume directly to book
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY && shouldResumeDirectlyToBook) {
+    Serial.printf("[%lu] [   ] Boot: Resuming directly to book (overlay mode, skipping boot screen)\n", millis());
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;
     APP_STATE.openEpubPath = "";
     APP_STATE.saveToFile();
     onGoToReader(path);
+  } else {
+    exitActivity();
+    enterNewActivity(new BootActivity(renderer, mappedInputManager));
+
+    if (shouldResumeDirectlyToBook) {
+      Serial.printf("[%lu] [   ] Boot: Resuming directly to book (after boot screen)\n", millis());
+      // Clear app state to avoid getting into a boot loop if the epub doesn't load
+      const auto path = APP_STATE.openEpubPath;
+      APP_STATE.openEpubPath = "";
+      APP_STATE.saveToFile();
+      onGoToReader(path);
+    } else {
+      Serial.printf("[%lu] [   ] Boot: Going to home (resumeOnBoot=%d, wasOnBook=%d)\n", millis(), 
+                    SETTINGS.resumeOnBoot, APP_STATE.wasOnBook);
+      onGoHome();
+    }
   }
 
   // Ensure we're not still holding the power button before leaving setup
