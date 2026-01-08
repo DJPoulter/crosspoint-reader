@@ -1,7 +1,5 @@
 #include "StringUtils.h"
 
-#include <cstring>
-
 namespace StringUtils {
 
 std::string sanitizeFilename(const std::string& name, size_t maxLength) {
@@ -33,20 +31,6 @@ std::string sanitizeFilename(const std::string& name, size_t maxLength) {
   }
 
   return result.empty() ? "book" : result;
-}
-
-bool checkFileExtension(const std::string& fileName, const char* extension) {
-  if (fileName.length() < strlen(extension)) {
-    return false;
-  }
-
-  const std::string fileExt = fileName.substr(fileName.length() - strlen(extension));
-  for (size_t i = 0; i < fileExt.length(); i++) {
-    if (tolower(fileExt[i]) != tolower(extension[i])) {
-      return false;
-    }
-  }
-  return true;
 }
 
 }  // namespace StringUtils

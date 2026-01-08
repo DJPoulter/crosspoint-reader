@@ -101,9 +101,17 @@ bool CrossPointSettings::loadFromFile() {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, refreshFrequency);
     if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string urlStr;
+      serialization::readString(inputFile, urlStr);
+      strncpy(opdsServerUrl, urlStr.c_str(), sizeof(opdsServerUrl) - 1);
+      opdsServerUrl[sizeof(opdsServerUrl) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, screenMargin);
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, sleepScreenCoverMode);
+<<<<<<< HEAD
     if (++settingsRead >= fileSettingsCount) break;
     {
       std::string urlStr;
@@ -124,6 +132,8 @@ bool CrossPointSettings::loadFromFile() {
       selectedSleepBmp[sizeof(selectedSleepBmp) - 1] = '\0';
     }
     if (++settingsRead >= fileSettingsCount) break;
+=======
+>>>>>>> feature/calibre-web-and-margins
   } while (false);
 
   inputFile.close();
