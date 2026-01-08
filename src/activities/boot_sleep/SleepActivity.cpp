@@ -31,8 +31,6 @@ void SleepActivity::onEnter() {
 }
 
 void SleepActivity::renderPopup(const char* message) const {
-  const bool wasDarkMode = renderer.isDarkModeEnabled();
-  renderer.setDarkModeEnabled(false);
   const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::BOLD);
   constexpr int margin = 20;
   const int x = (renderer.getScreenWidth() - textWidth - margin * 2) / 2;
@@ -44,7 +42,6 @@ void SleepActivity::renderPopup(const char* message) const {
   renderer.fillRect(x + 5, y + 5, w - 10, h - 10, false);
   renderer.drawText(UI_12_FONT_ID, x + margin, y + margin, message, true, EpdFontFamily::BOLD);
   renderer.displayBuffer();
-  renderer.setDarkModeEnabled(wasDarkMode);
 }
 
 void SleepActivity::renderCustomSleepScreen() const {
@@ -116,8 +113,6 @@ void SleepActivity::renderCustomSleepScreen() const {
 }
 
 void SleepActivity::renderDefaultSleepScreen() const {
-  const bool wasDarkMode = renderer.isDarkModeEnabled();
-  renderer.setDarkModeEnabled(false);
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
@@ -132,7 +127,6 @@ void SleepActivity::renderDefaultSleepScreen() const {
   }
 
   renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
-  renderer.setDarkModeEnabled(wasDarkMode);
 }
 
 void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
@@ -176,13 +170,10 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
     y = (pageHeight - bitmap.getHeight()) / 2;
   }
 
-  const bool wasDarkMode = renderer.isDarkModeEnabled();
-  renderer.setDarkModeEnabled(false);
   Serial.printf("[%lu] [SLP] drawing to %d x %d\n", millis(), x, y);
   renderer.clearScreen();
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
   renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
-  renderer.setDarkModeEnabled(wasDarkMode);
 
   if (bitmap.hasGreyscale()) {
     bitmap.rewindToData();
@@ -255,9 +246,6 @@ void SleepActivity::renderCoverSleepScreen() const {
 }
 
 void SleepActivity::renderBlankSleepScreen() const {
-  const bool wasDarkMode = renderer.isDarkModeEnabled();
-  renderer.setDarkModeEnabled(false);
   renderer.clearScreen();
   renderer.displayBuffer(EInkDisplay::HALF_REFRESH);
-  renderer.setDarkModeEnabled(wasDarkMode);
 }
