@@ -194,10 +194,12 @@ void waitForPowerRelease() {
 
 // Enter deep sleep mode
 void enterDeepSleep() {
-  // Get the current activity name before exiting
-  std::string prevActivityName = currentActivity ? currentActivity->name : "";
+  // Get the effective activity name BEFORE exiting (exitActivity may change currentActivity)
+  // For ActivityWithSubactivity, this returns the subactivity name if available
+  std::string effectiveActivityName = currentActivity ? currentActivity->getEffectiveActivityName() : "";
+  Serial.printf("[%lu] [   ] Captured effective activity name: '%s'\n", millis(), effectiveActivityName.c_str());
   exitActivity();
-  enterNewActivity(new SleepActivity(renderer, mappedInputManager, prevActivityName));
+  enterNewActivity(new SleepActivity(renderer, mappedInputManager, effectiveActivityName));
 
   einkDisplay.deepSleep();
   Serial.printf("[%lu] [   ] Power button press calibration value: %lu ms\n", millis(), t2 - t1);

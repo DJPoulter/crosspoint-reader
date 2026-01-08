@@ -14,4 +14,8 @@ class ActivityWithSubactivity : public Activity {
       : Activity(std::move(name), renderer, mappedInput) {}
   void loop() override;
   void onExit() override;
+  // Get the effective activity name (subactivity name if available, otherwise activity name)
+  std::string getEffectiveActivityName() const override {
+    return subActivity ? subActivity->name : name;
+  }
 };

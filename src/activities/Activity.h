@@ -23,4 +23,6 @@ class Activity {
   virtual void loop() {}
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
+  // Get the effective activity name (subactivity name if available, otherwise activity name)
+  virtual std::string getEffectiveActivityName() const { return name; }
 };
