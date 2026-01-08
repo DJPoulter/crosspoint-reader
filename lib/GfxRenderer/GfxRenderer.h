@@ -68,6 +68,11 @@ class GfxRenderer {
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
+  // Cache bitmap: reads and processes bitmap once, returns pointer to cached 2-bit data (caller must free)
+  uint8_t* cacheBitmap(const Bitmap& bitmap, int* outWidth, int* outHeight, int* outRowSize) const;
+  // Draw from cached bitmap data (same format as cacheBitmap output)
+  void drawCachedBitmap(const uint8_t* cachedData, int cachedWidth, int cachedHeight, int cachedRowSize,
+                        int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0, bool isTopDown = true) const;
 
   // Text
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
@@ -99,6 +104,7 @@ class GfxRenderer {
   void displayGrayBuffer() const;
   bool storeBwBuffer();  // Returns true if buffer was stored successfully
   void restoreBwBuffer();
+  void freeBwBuffer();  // Free stored BW buffer to free up RAM (48KB)
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Low level functions
