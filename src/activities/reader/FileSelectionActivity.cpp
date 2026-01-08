@@ -3,6 +3,9 @@
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
 
+#include <functional>
+#include <string>
+
 #include "MappedInputManager.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
@@ -11,6 +14,7 @@ namespace {
 constexpr int PAGE_ITEMS = 23;
 constexpr int SKIP_PAGE_MS = 700;
 constexpr unsigned long GO_HOME_MS = 1000;
+constexpr unsigned long DELETE_LONG_PRESS_MS = 1000;
 }  // namespace
 
 void sortFileList(std::vector<std::string>& strs) {
@@ -68,8 +72,11 @@ void FileSelectionActivity::onEnter() {
   renderingMutex = xSemaphoreCreateMutex();
 
   // basepath is set via constructor parameter (defaults to "/" if not specified)
+  state = State::BROWSING;
   loadFiles();
   selectorIndex = 0;
+  deleteConfirmSelection = 0;
+  fileToDelete.clear();
 
   // Trigger first update
   updateRequired = true;
@@ -96,7 +103,76 @@ void FileSelectionActivity::onExit() {
   files.clear();
 }
 
+void FileSelectionActivity::deleteFile(const std::string& filePath) {
+  // Check if this is an EPUB or XTC file and delete its cache
+  std::string ext4 = filePath.length() >= 4 ? filePath.substr(filePath.length() - 4) : "";
+  std::string ext5 = filePath.length() >= 5 ? filePath.substr(filePath.length() - 5) : "";
+  
+  bool isEpub = (ext5 == ".epub");
+  bool isXtc = (ext5 == ".xtch" || ext4 == ".xtc");
+  
+  if (isEpub || isXtc) {
+    // Calculate cache path the same way Epub/Xtc classes do
+    const std::string cacheDir = "/.crosspoint";
+    const std::string cachePrefix = isEpub ? "epub_" : "xtc_";
+    const std::string cachePath = cacheDir + "/" + cachePrefix + std::to_string(std::hash<std::string>{}(filePath));
+    
+    // Delete cache directory if it exists
+    if (SdMan.exists(cachePath.c_str())) {
+      if (SdMan.removeDir(cachePath.c_str())) {
+        Serial.printf("[%lu] [FileSel] Deleted cache: %s\n", millis(), cachePath.c_str());
+      } else {
+        Serial.printf("[%lu] [FileSel] Failed to delete cache: %s\n", millis(), cachePath.c_str());
+      }
+    }
+  }
+  
+  // Delete the actual file
+  if (SdMan.remove(filePath.c_str())) {
+    Serial.printf("[%lu] [FileSel] Deleted: %s\n", millis(), filePath.c_str());
+    loadFiles();
+    updateRequired = true;
+  } else {
+    Serial.printf("[%lu] [FileSel] Failed to delete: %s\n", millis(), filePath.c_str());
+  }
+}
+
 void FileSelectionActivity::loop() {
+  if (state == State::DELETE_CONFIRM) {
+    // Handle navigation in delete confirmation
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      deleteConfirmSelection = (deleteConfirmSelection + 1) % 2;
+      updateRequired = true;
+    }
+
+    // Handle confirmation
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      if (deleteConfirmSelection == 0) {
+        // Yes - delete the file
+        deleteFile(fileToDelete);
+        state = State::BROWSING;
+        fileToDelete.clear();
+      } else {
+        // No - cancel
+        state = State::BROWSING;
+        fileToDelete.clear();
+      }
+      updateRequired = true;
+      return;
+    }
+
+    // Handle cancel (back button)
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      state = State::BROWSING;
+      fileToDelete.clear();
+      updateRequired = true;
+      return;
+    }
+
+    return;
+  }
+
   // Long press BACK (1s+) goes to root folder
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
     if (basepath != "/") {
@@ -115,18 +191,31 @@ void FileSelectionActivity::loop() {
   const bool skipPage = mappedInput.getHeldTime() > SKIP_PAGE_MS;
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (files.empty()) {
-      return;
-    }
-
-    if (basepath.back() != '/') basepath += "/";
-    if (files[selectorIndex].back() == '/') {
-      basepath += files[selectorIndex].substr(0, files[selectorIndex].length() - 1);
-      loadFiles();
-      selectorIndex = 0;
-      updateRequired = true;
+    // Check if this was a long press
+    if (mappedInput.getHeldTime() >= DELETE_LONG_PRESS_MS) {
+      // Long press - show delete confirmation (only for files, not directories)
+      if (!files.empty() && files[selectorIndex].back() != '/') {
+        if (basepath.back() != '/') basepath += "/";
+        fileToDelete = basepath + files[selectorIndex];
+        state = State::DELETE_CONFIRM;
+        deleteConfirmSelection = 0;  // Default to "Yes"
+        updateRequired = true;
+      }
     } else {
-      onSelect(basepath + files[selectorIndex]);
+      // Short press - normal open behavior
+      if (files.empty()) {
+        return;
+      }
+
+      if (basepath.back() != '/') basepath += "/";
+      if (files[selectorIndex].back() == '/') {
+        basepath += files[selectorIndex].substr(0, files[selectorIndex].length() - 1);
+        loadFiles();
+        selectorIndex = 0;
+        updateRequired = true;
+      } else {
+        onSelect(basepath + files[selectorIndex]);
+      }
     }
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // Short press: go up one directory, or go home if at root
@@ -176,7 +265,59 @@ void FileSelectionActivity::displayTaskLoop() {
   }
 }
 
+void FileSelectionActivity::renderDeleteConfirm() const {
+  renderer.clearScreen();
+
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
+  const auto top = (pageHeight - height * 3) / 2;
+
+  renderer.drawCenteredText(UI_12_FONT_ID, top - 40, "Confirm Delete?", true, EpdFontFamily::BOLD);
+
+  // Show filename (truncate if too long)
+  std::string fileName = fileToDelete;
+  size_t lastSlash = fileName.find_last_of('/');
+  if (lastSlash != std::string::npos) {
+    fileName = fileName.substr(lastSlash + 1);
+  }
+  if (fileName.length() > 30) {
+    fileName = fileName.substr(0, 27) + "...";
+  }
+  renderer.drawCenteredText(UI_10_FONT_ID, top, fileName.c_str());
+
+  // Draw Yes/No buttons
+  const int buttonY = top + 80;
+  constexpr int buttonWidth = 60;
+  constexpr int buttonSpacing = 30;
+  constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
+  const int startX = (pageWidth - totalWidth) / 2;
+
+  // Draw "Yes" button
+  if (deleteConfirmSelection == 0) {
+    renderer.drawText(UI_10_FONT_ID, startX, buttonY, "[Yes]");
+  } else {
+    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, "Yes");
+  }
+
+  // Draw "No" button
+  if (deleteConfirmSelection == 1) {
+    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, "[No]");
+  } else {
+    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, "No");
+  }
+
+  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, "LEFT/RIGHT: Select | OK: Confirm");
+
+  renderer.displayBuffer();
+}
+
 void FileSelectionActivity::render() const {
+  if (state == State::DELETE_CONFIRM) {
+    renderDeleteConfirm();
+    return;
+  }
+
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
