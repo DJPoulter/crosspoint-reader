@@ -35,6 +35,15 @@ void GfxRenderer::rotateCoordinates(const int x, const int y, int* rotatedX, int
   }
 }
 
+// Helper function to swap pixel values for dark mode: 0↔3 (black↔white), 1↔2 (dark grey↔light grey)
+static inline uint8_t swapPixelValueForDarkMode(uint8_t val) {
+  if (val == 0) return 3;  // black → white
+  if (val == 3) return 0;  // white → black
+  if (val == 1) return 2;  // dark grey → light grey
+  if (val == 2) return 1;  // light grey → dark grey
+  return val;  // Should never happen, but return unchanged
+}
+
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   uint8_t* frameBuffer = einkDisplay.getFrameBuffer();
 
@@ -59,10 +68,12 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   const uint16_t byteIndex = rotatedY * EInkDisplay::DISPLAY_WIDTH_BYTES + (rotatedX / 8);
   const uint8_t bitPosition = 7 - (rotatedX % 8);  // MSB first
 
+  // Note: Dark mode inversion is handled at the drawing primitive level (renderChar, drawLine, etc.)
+  // For grayscale modes, state=false is used to mark pixels for grayscale rendering
   if (state) {
-    frameBuffer[byteIndex] &= ~(1 << bitPosition);  // Clear bit
+    frameBuffer[byteIndex] &= ~(1 << bitPosition);  // Clear bit (black)
   } else {
-    frameBuffer[byteIndex] |= 1 << bitPosition;  // Set bit
+    frameBuffer[byteIndex] |= 1 << bitPosition;  // Set bit (white or grayscale mark)
   }
 }
 
@@ -111,19 +122,25 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
 }
 
 void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) const {
+  // Invert color for dark mode in BW mode
+  bool actualState = state;
+  if (darkModeEnabled && renderMode == BW) {
+    actualState = !state;
+  }
+
   if (x1 == x2) {
     if (y2 < y1) {
       std::swap(y1, y2);
     }
     for (int y = y1; y <= y2; y++) {
-      drawPixel(x1, y, state);
+      drawPixel(x1, y, actualState);
     }
   } else if (y1 == y2) {
     if (x2 < x1) {
       std::swap(x1, x2);
     }
     for (int x = x1; x <= x2; x++) {
-      drawPixel(x, y1, state);
+      drawPixel(x, y1, actualState);
     }
   } else {
     // TODO: Implement
@@ -218,10 +235,23 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
         break;
       }
 
-      const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+      uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+      
+      // Swap pixel values for dark mode: 0↔3, 1↔2
+      if (darkModeEnabled) {
+        val = swapPixelValueForDarkMode(val);
+      }
 
-      if (renderMode == BW && val < 3) {
-        drawPixel(screenX, screenY);
+      if (renderMode == BW) {
+        // Determine the "background" color we should skip drawing
+        // Light mode: Skip 3 (White). Dark mode: Skip 0 (Black).
+        const uint8_t skipColor = darkModeEnabled ? 0 : 3;
+        
+        if (val != skipColor) {
+          // Map val to pixel state: 0/1 -> True (Black), 2/3 -> False (White)
+          const bool pixelColor = (val < 2);
+          drawPixel(screenX, screenY, pixelColor);
+        }
       } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
         drawPixel(screenX, screenY, false);
       } else if (renderMode == GRAYSCALE_LSB && val == 1) {
@@ -234,7 +264,15 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   free(rowBytes);
 }
 
-void GfxRenderer::clearScreen(const uint8_t color) const { einkDisplay.clearScreen(color); }
+void GfxRenderer::clearScreen(const uint8_t color) const {
+  // When dark mode is enabled, clear to black (0x00) instead of white (0xFF)
+  // This ensures the background is black in dark mode
+  uint8_t fillColor = color;
+  if (darkModeEnabled && color == 0xFF) {
+    fillColor = 0x00;  // Black instead of white
+  }
+  einkDisplay.clearScreen(fillColor);
+}
 
 void GfxRenderer::invertScreen() const {
   uint8_t* buffer = einkDisplay.getFrameBuffer();
@@ -248,9 +286,7 @@ void GfxRenderer::invertScreen() const {
 }
 
 void GfxRenderer::displayBuffer(const EInkDisplay::RefreshMode refreshMode) const {
-  if (darkModeEnabled) {
-    invertScreen();
-  }
+  // Dark mode is now handled at the pixel level during rendering, so no need to invert here
   einkDisplay.displayBuffer(refreshMode);
 }
 
@@ -456,13 +492,32 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
           const int screenX = x + (font.getData(style)->ascender - top + glyphY);
           const int screenY = yPos - left - glyphX;
 
+          // Invert black parameter for dark mode (used by both 1-bit and 2-bit fonts)
+          bool actualBlack = black;
+          if (darkModeEnabled && renderMode == BW) {
+            actualBlack = !black;
+          }
+
           if (is2Bit) {
             const uint8_t byte = bitmap[pixelPosition / 4];
             const uint8_t bit_index = (3 - pixelPosition % 4) * 2;
-            const uint8_t bmpVal = 3 - (byte >> bit_index) & 0x3;
+            uint8_t bmpVal = 3 - (byte >> bit_index) & 0x3;
+            
+            // Swap pixel values for dark mode: 0↔3, 1↔2
+            if (darkModeEnabled) {
+              bmpVal = swapPixelValueForDarkMode(bmpVal);
+            }
 
-            if (renderMode == BW && bmpVal < 3) {
-              drawPixel(screenX, screenY, black);
+            if (renderMode == BW) {
+              // Determine the "background" color we should skip drawing
+              // Light mode: Skip 3 (White). Dark mode: Skip 0 (Black).
+              const uint8_t skipColor = darkModeEnabled ? 0 : 3;
+              
+              if (bmpVal != skipColor) {
+                // For non-background pixels, use the text color (actualBlack)
+                // which is already inverted for dark mode
+                drawPixel(screenX, screenY, actualBlack);
+              }
             } else if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
               drawPixel(screenX, screenY, false);
             } else if (renderMode == GRAYSCALE_LSB && bmpVal == 1) {
@@ -473,7 +528,7 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
             const uint8_t bit_index = 7 - (pixelPosition % 8);
 
             if ((byte >> bit_index) & 1) {
-              drawPixel(screenX, screenY, black);
+              drawPixel(screenX, screenY, actualBlack);
             }
           }
         }
@@ -627,6 +682,12 @@ void GfxRenderer::renderChar(const EpdFontFamily& fontFamily, const uint32_t cp,
   const uint8_t* bitmap = nullptr;
   bitmap = &fontFamily.getData(style)->bitmap[offset];
 
+  // Invert the "ink" color for dark mode
+  bool actualPixelState = pixelState;
+  if (darkModeEnabled && renderMode == BW) {
+    actualPixelState = !pixelState;
+  }
+
   if (bitmap != nullptr) {
     for (int glyphY = 0; glyphY < height; glyphY++) {
       const int screenY = *y - glyph->top + glyphY;
@@ -640,11 +701,23 @@ void GfxRenderer::renderChar(const EpdFontFamily& fontFamily, const uint32_t cp,
           // the direct bit from the font is 0 -> white, 1 -> light gray, 2 -> dark gray, 3 -> black
           // we swap this to better match the way images and screen think about colors:
           // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
-          const uint8_t bmpVal = 3 - (byte >> bit_index) & 0x3;
+          uint8_t bmpVal = 3 - (byte >> bit_index) & 0x3;
+          
+          // Swap pixel values for dark mode: 0↔3, 1↔2
+          if (darkModeEnabled) {
+            bmpVal = swapPixelValueForDarkMode(bmpVal);
+          }
 
-          if (renderMode == BW && bmpVal < 3) {
-            // Black (also paints over the grays in BW mode)
-            drawPixel(screenX, screenY, pixelState);
+          if (renderMode == BW) {
+            // Determine the "background" color we should skip drawing
+            // Light mode: Skip 3 (White). Dark mode: Skip 0 (Black).
+            const uint8_t skipColor = darkModeEnabled ? 0 : 3;
+            
+            if (bmpVal != skipColor) {
+              // For non-background pixels, use the text color (actualPixelState)
+              // which is already inverted for dark mode in renderChar
+              drawPixel(screenX, screenY, actualPixelState);
+            }
           } else if (renderMode == GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
             // Light gray (also mark the MSB if it's going to be a dark gray too)
             // We have to flag pixels in reverse for the gray buffers, as 0 leave alone, 1 update
@@ -657,8 +730,9 @@ void GfxRenderer::renderChar(const EpdFontFamily& fontFamily, const uint32_t cp,
           const uint8_t byte = bitmap[pixelPosition / 8];
           const uint8_t bit_index = 7 - (pixelPosition % 8);
 
+          // For 1-bit fonts, use the inverted pixelState for dark mode
           if ((byte >> bit_index) & 1) {
-            drawPixel(screenX, screenY, pixelState);
+            drawPixel(screenX, screenY, actualPixelState);
           }
         }
       }
