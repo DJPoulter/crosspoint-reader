@@ -21,8 +21,8 @@ void SleepActivity::onEnter() {
     // For overlay mode: store framebuffer (book content), show popup, then restore and draw overlay
     // Store the framebuffer before popup overwrites it
     // Check if we're on a book reader activity by checking the activity name
-    // Book reader activities are "EpubReader" or "XtcReader"
-    isOnBook = (previousActivityName == "EpubReader" || previousActivityName == "XtcReader");
+    // Book reader activities are "EpubReader", "XtcReader", or "Reader" (which contains a book reader subactivity)
+    isOnBook = (previousActivityName == "EpubReader" || previousActivityName == "XtcReader" || previousActivityName == "Reader");
     Serial.printf("[%lu] [SLP] Overlay mode: previousActivity='%s', isOnBook=%d\n", 
                   millis(), previousActivityName.c_str(), isOnBook);
     
