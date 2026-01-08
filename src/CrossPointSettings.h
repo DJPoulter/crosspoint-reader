@@ -86,6 +86,8 @@ class CrossPointSettings {
   uint8_t darkMode = 0;
   // Resume to book on boot (if was on book when sleeping)
   uint8_t resumeOnBoot = 1;  // Default to enabled (1 = true, 0 = false)
+  // Selected sleep BMP filename (empty means random selection)
+  char selectedSleepBmp[256] = "";
 
   ~CrossPointSettings() = default;
 
