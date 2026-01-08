@@ -306,7 +306,7 @@ void EpubReaderActivity::renderScreen() {
       auto progressCallback = [this, barX, barY, barWidth, barHeight](int progress) {
         const int fillWidth = (barWidth - 2) * progress / 100;
         renderer.fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, true);
-        renderer.displayBuffer(EInkDisplay::FAST_REFRESH);
+        renderer.displayBuffer();
       };
 
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),

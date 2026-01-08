@@ -82,6 +82,8 @@ class CrossPointSettings {
   uint8_t screenMargin = 5;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
+  // Dark mode setting
+  uint8_t darkMode = 0;
 
   ~CrossPointSettings() = default;
 

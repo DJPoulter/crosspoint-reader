@@ -248,6 +248,9 @@ void GfxRenderer::invertScreen() const {
 }
 
 void GfxRenderer::displayBuffer(const EInkDisplay::RefreshMode refreshMode) const {
+  if (darkModeEnabled) {
+    invertScreen();
+  }
   einkDisplay.displayBuffer(refreshMode);
 }
 

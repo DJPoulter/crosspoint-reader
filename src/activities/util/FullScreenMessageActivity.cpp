@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include "CrossPointSettings.h"
 #include "fontIds.h"
 
 void FullScreenMessageActivity::onEnter() {

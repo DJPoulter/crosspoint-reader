@@ -285,6 +285,9 @@ void setup() {
 
   SETTINGS.loadFromFile();
 
+  // Set dark mode state on renderer
+  renderer.setDarkModeEnabled(SETTINGS.darkMode);
+
   // verify power button press duration after we've read settings.
   verifyWakeupLongPress();
 
