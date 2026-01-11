@@ -185,8 +185,8 @@ void WifiConnectionsActivity::deleteNetwork() {
 
   const auto& credentials = WIFI_STORE.getCredentials();
   const size_t totalItems = credentials.size() + 1;
-  if (selectorIndex > credentials.size()) {
-    selectorIndex = credentials.size();
+  if (selectorIndex >= totalItems) {
+    selectorIndex = totalItems - 1;
   }
 
   state = State::LIST;

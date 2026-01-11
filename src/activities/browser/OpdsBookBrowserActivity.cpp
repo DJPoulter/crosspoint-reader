@@ -88,9 +88,6 @@ void OpdsBookBrowserActivity::loop() {
   // Handle WiFi check state - only Back works
   if (state == BrowserState::CHECK_WIFI) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      if (subActivity) {
-        exitActivity();
-      }
       onGoHome();
     }
     return;
