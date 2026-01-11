@@ -207,17 +207,17 @@ bool WifiCredentialStore::connectToDefaultWifi(int timeoutMs) const {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(false);
   delay(100);
-  
+
   Serial.printf("[%lu] [WCS] Scanning for SSID: %s\n", millis(), defaultSSID.c_str());
   WiFi.scanNetworks(false);
-  
+
   const unsigned long scanStart = millis();
   int16_t scanResult = WiFi.scanComplete();
   while (scanResult == WIFI_SCAN_RUNNING && millis() - scanStart < 3000) {
     delay(100);
     scanResult = WiFi.scanComplete();
   }
-  
+
   if (scanResult > 0) {
     bool ssidFound = false;
     for (int i = 0; i < scanResult; i++) {
@@ -227,9 +227,9 @@ bool WifiCredentialStore::connectToDefaultWifi(int timeoutMs) const {
         break;
       }
     }
-    
+
     WiFi.scanDelete();
-    
+
     if (!ssidFound) {
       Serial.printf("[%lu] [WCS] SSID not found in scan results, skipping connection attempt\n", millis());
       return false;
@@ -260,7 +260,6 @@ bool WifiCredentialStore::connectToDefaultWifi(int timeoutMs) const {
 void WifiCredentialStore::ensureWifiConnected(ActivityWithSubactivity& activity, GfxRenderer& renderer,
                                               MappedInputManager& mappedInput, const std::function<void()>& onSuccess,
                                               const std::function<void()>& onCancel, int timeoutMs) {
-
   if (WiFi.status() == WL_CONNECTED) {
     onSuccess();
     return;
@@ -276,12 +275,13 @@ void WifiCredentialStore::ensureWifiConnected(ActivityWithSubactivity& activity,
 
   // Auto-connect failed - show WiFi selection list
   Serial.printf("[%lu] [WCS] Auto-connect failed, showing WiFi selection\n", millis());
-  activity.enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [&activity, onSuccess, onCancel](bool connected) {
-    activity.exitActivity();
-    if (connected) {
-      onSuccess();
-    } else {
-      onCancel();
-    }
-  }));
+  activity.enterNewActivity(
+      new WifiSelectionActivity(renderer, mappedInput, [&activity, onSuccess, onCancel](bool connected) {
+        activity.exitActivity();
+        if (connected) {
+          onSuccess();
+        } else {
+          onCancel();
+        }
+      }));
 }

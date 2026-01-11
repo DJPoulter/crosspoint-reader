@@ -348,8 +348,8 @@ void WifiSelectionActivity::loop() {
         displaySetDefaultPrompt();
       }
       onComplete(true);
-    }else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-    // Skip saving, complete anyway
+    } else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      // Skip saving, complete anyway
       onComplete(true);
     }
     return;

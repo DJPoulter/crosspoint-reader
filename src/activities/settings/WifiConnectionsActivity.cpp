@@ -12,7 +12,7 @@ namespace {
 constexpr int PAGE_ITEMS = 23;
 constexpr int SKIP_PAGE_MS = 700;
 constexpr unsigned long IGNORE_INPUT_MS = 300;
-}
+}  // namespace
 
 void WifiConnectionsActivity::taskTrampoline(void* param) {
   auto* self = static_cast<WifiConnectionsActivity*>(param);
@@ -32,12 +32,7 @@ void WifiConnectionsActivity::onEnter() {
 
   WIFI_STORE.loadFromFile();
 
-  xTaskCreate(&WifiConnectionsActivity::taskTrampoline, "WifiConnectionsTask",
-              4096,
-              this,
-              1,
-              &displayTaskHandle
-  );
+  xTaskCreate(&WifiConnectionsActivity::taskTrampoline, "WifiConnectionsTask", 4096, this, 1, &displayTaskHandle);
 }
 
 void WifiConnectionsActivity::onExit() {
@@ -68,7 +63,7 @@ void WifiConnectionsActivity::loop() {
     WIFI_STORE.loadFromFile();
     const std::string currentDefault = WIFI_STORE.getDefaultSSID();
     const bool isDefault = (selectedNetwork == currentDefault);
-    
+
     // Handle settings menu
     if (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
         mappedInput.wasReleased(MappedInputManager::Button::Left)) {
@@ -113,13 +108,16 @@ void WifiConnectionsActivity::loop() {
       // "Add new connection" selected - launch WiFi selection
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
-      enterNewActivity(new WifiSelectionActivity(renderer, mappedInput, [this](bool connected) {
-        // Reload credentials after WiFi selection
-        WIFI_STORE.loadFromFile();
-        exitActivity();
-        enterTime = millis();  // Reset enter time to ignore input after subactivity exits
-        updateRequired = true;
-      }, true));  // true = fromSettingsScreen (always save password and disconnect after)
+      enterNewActivity(new WifiSelectionActivity(
+          renderer, mappedInput,
+          [this](bool connected) {
+            // Reload credentials after WiFi selection
+            WIFI_STORE.loadFromFile();
+            exitActivity();
+            enterTime = millis();  // Reset enter time to ignore input after subactivity exits
+            updateRequired = true;
+          },
+          true));  // true = fromSettingsScreen (always save password and disconnect after)
       xSemaphoreGive(renderingMutex);
     } else {
       // Regular credential selected
@@ -231,9 +229,8 @@ void WifiConnectionsActivity::render() {
     const std::string currentDefault = WIFI_STORE.getDefaultSSID();
     const bool isDefault = (selectedNetwork == currentDefault);
 
-    const char* defaultText = settingsSelection == 0 
-      ? (isDefault ? "> Remove Default" : "> Set Default")
-      : (isDefault ? "  Remove Default" : "  Set Default");
+    const char* defaultText = settingsSelection == 0 ? (isDefault ? "> Remove Default" : "> Set Default")
+                                                     : (isDefault ? "  Remove Default" : "  Set Default");
     const char* deleteText = settingsSelection == 1 ? "> Delete" : "  Delete";
     renderer.drawCenteredText(UI_10_FONT_ID, centerY + 20, defaultText);
     renderer.drawCenteredText(UI_10_FONT_ID, centerY + 40, deleteText);
@@ -250,7 +247,7 @@ void WifiConnectionsActivity::render() {
     const auto pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
     const std::string& defaultSSID = WIFI_STORE.getDefaultSSID();
     renderer.fillRect(0, 60 + (selectorIndex % PAGE_ITEMS) * 30 - 2, pageWidth - 1, 30);
-    
+
     for (size_t i = pageStartIndex; i < totalItems && i < pageStartIndex + PAGE_ITEMS; i++) {
       std::string displayText;
       if (i == 0) {
@@ -268,4 +265,3 @@ void WifiConnectionsActivity::render() {
 
   renderer.displayBuffer();
 }
-

@@ -368,7 +368,7 @@ void OpdsBookBrowserActivity::checkAndConnectWifi() {
   WIFI_STORE.loadFromFile();
   const bool hasDefaultSSID = !WIFI_STORE.getDefaultSSID().empty();
   const bool alreadyConnected = (WiFi.status() == WL_CONNECTED);
-  
+
   if (hasDefaultSSID && !alreadyConnected) {
     statusMessage = "Connecting to WiFi...";
     updateRequired = true;
@@ -377,12 +377,10 @@ void OpdsBookBrowserActivity::checkAndConnectWifi() {
   WIFI_STORE.ensureWifiConnected(
       *this, renderer, mappedInput,
       [this]() {
-    state = BrowserState::LOADING;
-    statusMessage = "Loading...";
-    updateRequired = true;
-    fetchFeed(currentPath);
+        state = BrowserState::LOADING;
+        statusMessage = "Loading...";
+        updateRequired = true;
+        fetchFeed(currentPath);
       },
-      [this]() {
-        onGoHome();
-      });
+      [this]() { onGoHome(); });
 }

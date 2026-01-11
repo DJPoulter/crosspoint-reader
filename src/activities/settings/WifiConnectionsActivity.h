@@ -23,10 +23,7 @@ class WifiConnectionsActivity final : public ActivityWithSubactivity {
   void loop() override;
 
  private:
-  enum class State {
-    LIST,
-    SETTINGS_MENU
-  };
+  enum class State { LIST, SETTINGS_MENU };
 
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
@@ -47,4 +44,3 @@ class WifiConnectionsActivity final : public ActivityWithSubactivity {
   void deleteNetwork();
   void cancelSettings();
 };
-

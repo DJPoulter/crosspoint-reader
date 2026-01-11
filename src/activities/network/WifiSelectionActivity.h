@@ -27,7 +27,7 @@ enum class WifiSelectionState {
   CONNECTING,          // Attempting to connect
   CONNECTED,           // Successfully connected
   SAVE_PROMPT,         // Asking user if they want to save the password
-  SET_DEFAULT_PROMPT, // Asking user if they want to set as default
+  SET_DEFAULT_PROMPT,  // Asking user if they want to set as default
   CONNECTION_FAILED,   // Connection failed
   FORGET_PROMPT        // Asking user if they want to forget the network
 };
@@ -104,9 +104,9 @@ class WifiSelectionActivity final : public ActivityWithSubactivity {
 
  public:
   explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                 const std::function<void(bool connected)>& onComplete,
-                                 bool fromSettingsScreen = false)
-      : ActivityWithSubactivity("WifiSelection", renderer, mappedInput), onComplete(onComplete),
+                                 const std::function<void(bool connected)>& onComplete, bool fromSettingsScreen = false)
+      : ActivityWithSubactivity("WifiSelection", renderer, mappedInput),
+        onComplete(onComplete),
         fromSettingsScreen(fromSettingsScreen) {}
   void onEnter() override;
   void onExit() override;
