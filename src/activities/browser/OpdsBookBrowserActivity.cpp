@@ -26,7 +26,7 @@ void OpdsBookBrowserActivity::taskTrampoline(void* param) {
 }
 
 void OpdsBookBrowserActivity::onEnter() {
-  Activity::onEnter();
+  ActivityWithSubactivity::onEnter();
 
   renderingMutex = xSemaphoreCreateMutex();
   state = BrowserState::CHECK_WIFI;
@@ -50,7 +50,7 @@ void OpdsBookBrowserActivity::onEnter() {
 }
 
 void OpdsBookBrowserActivity::onExit() {
-  Activity::onExit();
+  ActivityWithSubactivity::onExit();
 
   // Turn off WiFi when exiting
   WiFi.mode(WIFI_OFF);
@@ -67,18 +67,28 @@ void OpdsBookBrowserActivity::onExit() {
 }
 
 void OpdsBookBrowserActivity::loop() {
-  if (subActivity) {
-    subActivity->loop();
+  // Handle WiFi selection subactivity
+  if (state == BrowserState::WIFI_SELECTION) {
+    ActivityWithSubactivity::loop();
     return;
   }
 
   // Handle error state - Confirm retries, Back goes back or home
   if (state == BrowserState::ERROR) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      state = BrowserState::LOADING;
-      statusMessage = "Loading...";
-      updateRequired = true;
-      fetchFeed(currentPath);
+      // Check if WiFi is still connected
+      if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+        // WiFi connected - just retry fetching the feed
+        Serial.printf("[%lu] [OPDS] Retry: WiFi connected, retrying fetch\n", millis());
+        state = BrowserState::LOADING;
+        statusMessage = "Loading...";
+        updateRequired = true;
+        fetchFeed(currentPath);
+      } else {
+        // WiFi not connected - launch WiFi selection
+        Serial.printf("[%lu] [OPDS] Retry: WiFi not connected, launching selection\n", millis());
+        launchWifiSelection();
+      }
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       navigateBack();
     }
@@ -362,11 +372,20 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 }
 
 void OpdsBookBrowserActivity::checkAndConnectWifi() {
+  // Already connected? Verify connection is valid by checking IP
+  if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+    state = BrowserState::LOADING;
+    statusMessage = "Loading...";
+    updateRequired = true;
+    fetchFeed(currentPath);
+    return;
+  }
+
+  // Try to connect to default WiFi if available
   WIFI_STORE.loadFromFile();
   const bool hasDefaultSSID = !WIFI_STORE.getDefaultSSID().empty();
-  const bool alreadyConnected = (WiFi.status() == WL_CONNECTED);
 
-  if (hasDefaultSSID && !alreadyConnected) {
+  if (hasDefaultSSID) {
     statusMessage = "Connecting to WiFi...";
     updateRequired = true;
   }
@@ -379,5 +398,37 @@ void OpdsBookBrowserActivity::checkAndConnectWifi() {
         updateRequired = true;
         fetchFeed(currentPath);
       },
-      [this]() { onGoHome(); });
+      [this]() {
+        // User cancelled WiFi selection - go home
+        onGoHome();
+      });
+}
+
+void OpdsBookBrowserActivity::launchWifiSelection() {
+  state = BrowserState::WIFI_SELECTION;
+  updateRequired = true;
+
+  enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
+                                             [this](const bool connected) { onWifiSelectionComplete(connected); }));
+}
+
+void OpdsBookBrowserActivity::onWifiSelectionComplete(const bool connected) {
+  exitActivity();
+
+  if (connected) {
+    Serial.printf("[%lu] [OPDS] WiFi connected via selection, fetching feed\n", millis());
+    state = BrowserState::LOADING;
+    statusMessage = "Loading...";
+    updateRequired = true;
+    fetchFeed(currentPath);
+  } else {
+    Serial.printf("[%lu] [OPDS] WiFi selection cancelled/failed\n", millis());
+    // Force disconnect to ensure clean state for next retry
+    // This prevents stale connection status from interfering
+    WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
+    state = BrowserState::ERROR;
+    errorMessage = "WiFi connection failed";
+    updateRequired = true;
+  }
 }
