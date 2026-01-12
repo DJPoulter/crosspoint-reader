@@ -246,6 +246,7 @@ void SleepActivity::renderCoverSleepScreen() const {
   }
 
   std::string coverBmpPath;
+  bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 
   if (StringUtils::checkFileExtension(APP_STATE.openEpubPath, ".xtc") ||
       StringUtils::checkFileExtension(APP_STATE.openEpubPath, ".xtch")) {
@@ -270,12 +271,12 @@ void SleepActivity::renderCoverSleepScreen() const {
       return renderDefaultSleepScreen();
     }
 
-    if (!lastEpub.generateCoverBmp()) {
+    if (!lastEpub.generateCoverBmp(cropped)) {
       Serial.println("[SLP] Failed to generate cover bmp");
       return renderDefaultSleepScreen();
     }
 
-    coverBmpPath = lastEpub.getCoverBmpPath();
+    coverBmpPath = lastEpub.getCoverBmpPath(cropped);
   } else {
     return renderDefaultSleepScreen();
   }
