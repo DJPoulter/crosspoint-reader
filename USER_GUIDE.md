@@ -56,6 +56,9 @@ The File Upload screen allows you to upload new e-books to the device. When you 
 
 See the [webserver docs](./docs/webserver.md) for more information on how to connect to the web server and upload files.
 
+> [!TIP]
+> Advanced users can also manage files programmatically or via the command line using `curl`. See the [webserver docs](./docs/webserver.md) for details.
+
 ### 3.5 Settings
 
 The Settings screen allows you to configure the device's behavior. There are a few settings you can adjust:
@@ -64,6 +67,7 @@ The Settings screen allows you to configure the device's behavior. There are a f
   - "Light" - The same default sleep screen, on a white background
   - "Custom" - Custom images from the SD card, see [Sleep Screen](#36-sleep-screen) below for more information
   - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
+  - "Blank" - A blank screen
 - **Status Bar**: Configure the status bar displayed while reading:
   - "None" - No status bar
   - "No Progress" - Show status bar without reading progress
