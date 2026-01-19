@@ -79,9 +79,16 @@ bool Page::serialize(FsFile& file) const {
 }
 
 void DropCapElement::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
-  // Use the stored fontId (not the passed one) for drop cap
-  // Render with improved scaling algorithm for smoother appearance
-  renderer.drawTextScaled2x(this->fontId, xPos + xOffset, yPos + yOffset, character.c_str(), true, style);
+  // Use TTF rendering for drop cap - calculate font size to span 2 lines
+  // Get line height from the base font to calculate appropriate drop cap size
+  const int lineHeight = renderer.getLineHeight(fontId);
+  
+  // Drop cap should span 2 lines, so make it approximately 2x the line height
+  // Add some extra for visual impact (about 2.5x)
+  const int dropCapFontSize = (lineHeight * 5) / 2;  // 2.5x line height
+  
+  // Render using TTF (smooth, scalable)
+  renderer.drawTextTTF(xPos + xOffset, yPos + yOffset, character.c_str(), dropCapFontSize, true);
 }
 
 bool DropCapElement::serialize(FsFile& file) {

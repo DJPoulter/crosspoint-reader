@@ -2,10 +2,28 @@
 
 #include <EInkDisplay.h>
 #include <EpdFontFamily.h>
+#include <OpenFontRender.h>
 
 #include <map>
 
 #include "Bitmap.h"
+
+// Forward declaration
+class GfxRenderer;
+
+// Drawer class for OpenFontRender integration
+class GfxRendererDrawer {
+ public:
+  GfxRenderer* renderer;
+  bool black;
+
+  GfxRendererDrawer(GfxRenderer* r, bool b);
+
+  void drawPixel(int32_t x, int32_t y, uint16_t color);
+  void drawFastHLine(int32_t x, int32_t y, int32_t w, uint16_t color);
+  void startWrite();
+  void endWrite();
+};
 
 class GfxRenderer {
  public:
@@ -31,6 +49,8 @@ class GfxRenderer {
   bool darkModeEnabled = false;
   uint8_t* bwBufferChunks[BW_BUFFER_NUM_CHUNKS] = {nullptr};
   std::map<int, EpdFontFamily> fontMap;
+  OpenFontRender ofr;  // TTF font renderer
+  bool ttfFontLoaded = false;  // Track if TTF font is loaded
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, const int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
   void freeBwBufferChunks();
@@ -87,6 +107,9 @@ class GfxRenderer {
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawTextScaled2x(int fontId, int x, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // TTF font rendering methods
+  bool loadTTFFont(const char* fontPath);  // Load TTF from SD card
+  void drawTextTTF(int x, int y, const char* text, int fontSize, bool black = true);
   int getSpaceWidth(int fontId) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;

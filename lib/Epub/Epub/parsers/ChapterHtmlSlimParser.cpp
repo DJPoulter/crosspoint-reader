@@ -577,13 +577,10 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
     const int dropCapFontId = fontId;  // Keep the same font, scale it 3x in rendering
     const EpdFontFamily::Style dropCapStyle = currentTextBlock->getDropCapStyle();
     
-    // Position drop cap at the baseline of the first line, dropped down
-    // The y position should be adjusted so the drop cap aligns with the text baseline
-    // drawText adds getFontAscenderSize, so we need to subtract it to align baselines
-    const int dropCapAscender = renderer.getFontAscenderSize(dropCapFontId);
-    const int textAscender = renderer.getFontAscenderSize(actualFontId);
+    // Position drop cap at the baseline of the first line
+    // For TTF rendering, move up by 3/4 of a line height for better alignment
     const int lineHeight = renderer.getLineHeight(actualFontId) * lineCompression;
-    const int dropCapY = currentPageNextY - (dropCapAscender - textAscender) + lineHeight;  // Drop down by one line height
+    const int dropCapY = currentPageNextY - (lineHeight * 3 / 4);
     
     // Create a DropCapElement and add it to the page
     auto dropCapElement = std::make_shared<DropCapElement>(dropCapChar, 0, dropCapY, dropCapFontId, dropCapStyle);

@@ -284,6 +284,17 @@ void setupDisplayAndFonts() {
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  
+  // Load TTF font for drop caps (if available on SD card)
+  // Place your TTF font file at /fonts/bookerly.ttf (or adjust path as needed)
+  if (SdMan.ready()) {
+    if (renderer.loadTTFFont("/fonts/bookerly.ttf")) {
+      Serial.printf("[%lu] [   ] TTF font loaded for drop caps\n", millis());
+    } else {
+      Serial.printf("[%lu] [   ] TTF font not found, drop caps will use bitmap scaling\n", millis());
+    }
+  }
+  
   Serial.printf("[%lu] [   ] Fonts setup\n", millis());
 }
 
