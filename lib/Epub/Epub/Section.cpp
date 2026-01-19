@@ -7,9 +7,9 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 9;
+constexpr uint8_t SECTION_FILE_VERSION = 10;  // Incremented for standardizeFormatting support
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
-                                 sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint32_t);
+                                 sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(uint32_t);
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -31,14 +31,14 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
 
 void Section::writeSectionFileHeader(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                                      const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                     const uint16_t viewportHeight) {
+                                     const uint16_t viewportHeight, const bool standardizeFormatting) {
   if (!file) {
     Serial.printf("[%lu] [SCT] File not open for writing header\n", millis());
     return;
   }
   static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(fontId) + sizeof(lineCompression) +
                                    sizeof(extraParagraphSpacing) + sizeof(paragraphAlignment) + sizeof(viewportWidth) +
-                                   sizeof(viewportHeight) + sizeof(pageCount) + sizeof(uint32_t),
+                                   sizeof(viewportHeight) + sizeof(standardizeFormatting) + sizeof(pageCount) + sizeof(uint32_t),
                 "Header size mismatch");
   serialization::writePod(file, SECTION_FILE_VERSION);
   serialization::writePod(file, fontId);
@@ -47,14 +47,17 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
   serialization::writePod(file, paragraphAlignment);
   serialization::writePod(file, viewportWidth);
   serialization::writePod(file, viewportHeight);
+  serialization::writePod(file, standardizeFormatting);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0 when written)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset
 }
 
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                              const uint16_t viewportHeight) {
+                              const uint16_t viewportHeight, const bool standardizeFormatting) {
+  Serial.printf("[%lu] [SCT] loadSectionFile: standardizeFormatting=%d\n", millis(), standardizeFormatting);
   if (!SdMan.openFileForRead("SCT", filePath, file)) {
+    Serial.printf("[%lu] [SCT] Cache file not found: %s\n", millis(), filePath.c_str());
     return false;
   }
 
@@ -74,18 +77,34 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     float fileLineCompression;
     bool fileExtraParagraphSpacing;
     uint8_t fileParagraphAlignment;
+    bool fileStandardizeFormatting = false;  // Default for old cache files
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
     serialization::readPod(file, fileParagraphAlignment);
     serialization::readPod(file, fileViewportWidth);
     serialization::readPod(file, fileViewportHeight);
+    // Read standardizeFormatting if version >= 10, otherwise default to false
+    if (version >= 10) {
+      serialization::readPod(file, fileStandardizeFormatting);
+      Serial.printf("[%lu] [SCT] Cache version %u: fileStandardizeFormatting=%d, requested=%d\n", 
+                    millis(), version, fileStandardizeFormatting, standardizeFormatting);
+    } else {
+      Serial.printf("[%lu] [SCT] Cache version %u (old): fileStandardizeFormatting defaults to false, requested=%d\n", 
+                    millis(), version, standardizeFormatting);
+    }
 
     if (fontId != fileFontId || lineCompression != fileLineCompression ||
         extraParagraphSpacing != fileExtraParagraphSpacing || paragraphAlignment != fileParagraphAlignment ||
-        viewportWidth != fileViewportWidth || viewportHeight != fileViewportHeight) {
+        viewportWidth != fileViewportWidth || viewportHeight != fileViewportHeight ||
+        standardizeFormatting != fileStandardizeFormatting) {
       file.close();
-      Serial.printf("[%lu] [SCT] Deserialization failed: Parameters do not match\n", millis());
+      Serial.printf("[%lu] [SCT] Parameters mismatch - fontId: %d/%d, lineComp: %.2f/%.2f, extraPara: %d/%d, "
+                    "paraAlign: %d/%d, viewport: %dx%d/%dx%d, standardize: %d/%d\n",
+                    millis(), fontId, fileFontId, lineCompression, fileLineCompression,
+                    extraParagraphSpacing, fileExtraParagraphSpacing, paragraphAlignment, fileParagraphAlignment,
+                    viewportWidth, viewportHeight, fileViewportWidth, fileViewportHeight,
+                    standardizeFormatting, fileStandardizeFormatting);
       clearCache();
       return false;
     }
@@ -115,8 +134,11 @@ bool Section::clearCache() const {
 
 bool Section::createSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                const uint16_t viewportHeight, const std::function<void()>& progressSetupFn,
+                                const uint16_t viewportHeight, const bool standardizeFormatting,
+                                const std::function<void()>& progressSetupFn,
                                 const std::function<void(int)>& progressFn) {
+  Serial.printf("[%lu] [SCT] createSectionFile: standardizeFormatting=%d, paragraphAlignment=%d\n", 
+                millis(), standardizeFormatting, paragraphAlignment);
   constexpr uint32_t MIN_SIZE_FOR_PROGRESS = 50 * 1024;  // 50KB
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
@@ -172,14 +194,14 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
   writeSectionFileHeader(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                         viewportHeight);
+                         viewportHeight, standardizeFormatting);
   std::vector<uint32_t> lut = {};
 
   ChapterHtmlSlimParser visitor(
       tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
       viewportHeight,
       [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(this->onPageComplete(std::move(page))); },
-      progressFn);
+      progressFn, standardizeFormatting);
   success = visitor.parseAndBuildPages();
 
   SdMan.remove(tmpHtmlPath.c_str());

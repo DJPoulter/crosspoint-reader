@@ -96,6 +96,8 @@ class CrossPointSettings {
   char selectedSleepBmp[256] = "";
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
+  // Standardize EPUB formatting (ignore HTML styling, use uniform formatting)
+  uint8_t standardizeFormatting = 0;  // 0 = false, 1 = true
 
   ~CrossPointSettings() = default;
 

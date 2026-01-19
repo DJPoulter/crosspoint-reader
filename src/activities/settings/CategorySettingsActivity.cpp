@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <HardwareSerial.h>
+#include <SDCardManager.h>
 
 #include <cstring>
 
@@ -84,6 +85,46 @@ void CategorySettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
+    
+    // If standardizeFormatting changed, clear all EPUB section caches
+    if (strcmp(setting.name, "Standardize Formatting") == 0) {
+      Serial.printf("[%lu] [SET] Standardize Formatting changed, clearing EPUB section caches...\n", millis());
+      // Clear all section caches in .crosspoint directory
+      const std::string crosspointDir = "/.crosspoint";
+      if (SdMan.exists(crosspointDir.c_str())) {
+        // Iterate through all epub_* directories
+        auto dir = SdMan.open(crosspointDir.c_str());
+        if (dir && dir.isDirectory()) {
+          char name[256];
+          while (auto entry = dir.openNextFile()) {
+            entry.getName(name, sizeof(name));
+            std::string entryName(name);
+            // Check if it's an EPUB cache directory
+            if (entryName.find("epub_") == 0) {
+              std::string sectionsDir = crosspointDir + "/" + entryName + "/sections";
+              if (SdMan.exists(sectionsDir.c_str())) {
+                auto sectionsDirHandle = SdMan.open(sectionsDir.c_str());
+                if (sectionsDirHandle && sectionsDirHandle.isDirectory()) {
+                  char sectionName[256];
+                  while (auto sectionEntry = sectionsDirHandle.openNextFile()) {
+                    sectionEntry.getName(sectionName, sizeof(sectionName));
+                    std::string sectionPath = sectionsDir + "/" + std::string(sectionName);
+                    if (SdMan.remove(sectionPath.c_str())) {
+                      Serial.printf("[%lu] [SET] Cleared section cache: %s\n", millis(), sectionPath.c_str());
+                    }
+                    sectionEntry.close();
+                  }
+                  sectionsDirHandle.close();
+                }
+              }
+            }
+            entry.close();
+          }
+          dir.close();
+        }
+      }
+      Serial.printf("[%lu] [SET] EPUB section cache clearing complete\n", millis());
+    }
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());

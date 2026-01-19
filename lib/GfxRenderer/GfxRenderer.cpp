@@ -121,6 +121,93 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   }
 }
 
+void GfxRenderer::drawTextScaled2x(const int fontId, const int x, const int y, const char* text, const bool black,
+                                   const EpdFontFamily::Style style) const {
+  const int yPos = y + getFontAscenderSize(fontId);
+  int xpos = x;
+
+  if (text == nullptr || *text == '\0') return;
+  if (fontMap.count(fontId) == 0) return;
+
+  const auto& font = fontMap.at(fontId);
+  if (!font.hasPrintableChars(text, style)) return;
+
+  bool actualBlack = black;
+  if (darkModeEnabled && renderMode == BW) {
+    actualBlack = !black;
+  }
+
+  uint32_t cp;
+  const uint8_t* textPtr = reinterpret_cast<const uint8_t*>(text);
+  
+  const int scale = 3; 
+
+  const auto* fontData = font.getData(style);
+  if (!fontData) return;
+  const int is2Bit = fontData->is2Bit;
+  const uint8_t* baseBitmap = fontData->bitmap;
+
+  while ((cp = utf8NextCodepoint(&textPtr))) {
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    if (!glyph) glyph = font.getGlyph('?', style);
+    if (!glyph) continue;
+
+    const uint32_t offset = glyph->dataOffset;
+    const uint8_t width = glyph->width;
+    const uint8_t height = glyph->height;
+    const int left = glyph->left;
+    const int top = glyph->top;
+    
+    const uint8_t* bitmap = &baseBitmap[offset];
+    
+    const int maxByteIndex = is2Bit ? ((width * height + 3) / 4) : ((width * height + 7) / 8);
+
+    if (bitmap != nullptr) {
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          const int pPos = y * width + x;
+          const int bIndex = is2Bit ? (pPos / 4) : (pPos / 8);
+          
+          if (bIndex >= maxByteIndex) continue;
+          
+          bool shouldDraw = false;
+          
+          if (is2Bit) {
+            const uint8_t b = bitmap[bIndex];
+            const uint8_t shift = (3 - pPos % 4) * 2;
+            uint8_t val = 3 - ((b >> shift) & 0x3);
+            if (darkModeEnabled) val = swapPixelValueForDarkMode(val);
+            if (renderMode == BW) {
+              const uint8_t skipColor = darkModeEnabled ? 0 : 3;
+              shouldDraw = (val != skipColor);
+            } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+              shouldDraw = true;
+            } else if (renderMode == GRAYSCALE_LSB && val == 1) {
+              shouldDraw = true;
+            }
+          } else {
+            const uint8_t b = bitmap[bIndex];
+            const uint8_t bit_index = 7 - (pPos % 8);
+            shouldDraw = ((b >> bit_index) & 1) != 0;
+          }
+          
+          if (shouldDraw) {
+            // Simple 3x scaling: draw each pixel as a 3x3 block
+            for (int sy = 0; sy < scale; sy++) {
+              for (int sx = 0; sx < scale; sx++) {
+                drawPixel(xpos + left * scale + (x * scale + sx),
+                          yPos - top * scale + (y * scale + sy),
+                          actualBlack);
+              }
+            }
+          }
+        }
+      }
+    }
+    xpos += glyph->advanceX * scale;
+  }
+}
+
 void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) const {
   // Invert color for dark mode in BW mode
   bool actualState = state;
@@ -789,7 +876,13 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
     return 0;
   }
 
-  return fontMap.at(fontId).getData(EpdFontFamily::REGULAR)->ascender;
+  const auto* fontData = fontMap.at(fontId).getData(EpdFontFamily::REGULAR);
+  if (fontData == nullptr) {
+    Serial.printf("[%lu] [GFX] Font %d data is null\n", millis(), fontId);
+    return 0;
+  }
+
+  return fontData->ascender;
 }
 
 int GfxRenderer::getLineHeight(const int fontId) const {
