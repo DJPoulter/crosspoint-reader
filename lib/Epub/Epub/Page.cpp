@@ -87,8 +87,8 @@ void DropCapElement::render(GfxRenderer& renderer, const int fontId, const int x
   // Add some extra for visual impact (about 2.5x)
   const int dropCapFontSize = (lineHeight * 5) / 2;  // 2.5x line height
   
-  // Render using TTF (smooth, scalable)
-  renderer.drawTextTTF(xPos + xOffset, yPos + yOffset, character.c_str(), dropCapFontSize, true);
+  // Render using TTF (loads, renders, unloads for RAM stability)
+  renderer.drawDropCapTTF(xPos + xOffset, yPos + yOffset, character.c_str(), dropCapFontSize);
 }
 
 bool DropCapElement::serialize(FsFile& file) {

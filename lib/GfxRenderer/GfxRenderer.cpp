@@ -1341,63 +1341,52 @@ void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBo
   }
 }
 
-bool GfxRenderer::loadTTFFont(const char* fontPath) {
-  if (!SdMan.ready()) return false;
+void GfxRenderer::drawDropCapTTF(int x, int y, const char* text, int fontSize) {
+  if (!SdMan.ready()) return;
+  if (text == nullptr || *text == '\0') return;
 
-  FsFile fontFile;
-  if (!SdMan.openFileForRead("SD", fontPath, fontFile)) {
-    Serial.printf("[%lu] [GFX] Failed to open TTF: %s\n", millis(), fontPath);
-    return false;
-  }
-
-  const size_t fileSize = fontFile.fileSize();
+  // 1. ALLOCATE: Open file & malloc buffer
+  const char* fontPath = "/fonts/bookerly.ttf";
+  FsFile f;
+  if (!SdMan.openFileForRead("SD", fontPath, f)) return;
+  
+  size_t size = f.fileSize();
   
   // SAFETY CHECK: Reject large fonts that will crash the ESP32
-  // We only have ~200KB free heap. Cap it at 50KB to be safe.
-  if (fileSize > 50 * 1024) { 
-    Serial.printf("[%lu] [GFX] TTF too large (%lu bytes). Use a subset (A-Z) only!\n", millis(), fileSize);
-    fontFile.close();
-    return false;
+  if (size > 50 * 1024) {
+    f.close();
+    return;
   }
-
-  // Allocate buffer
-  uint8_t* fontData = static_cast<uint8_t*>(malloc(fileSize));
-  if (!fontData) {
-    Serial.printf("[%lu] [GFX] Malloc failed for TTF (%lu bytes)\n", millis(), fileSize);
-    fontFile.close();
-    return false;
-  }
-
-  fontFile.read(fontData, fileSize);
-  fontFile.close();
-
-  // Load into OFR (It takes ownership, do NOT free fontData)
-  if (ofr.loadFont(fontData, fileSize) != 0) {
-    Serial.printf("[%lu] [GFX] OFR load failed\n", millis());
-    free(fontData);
-    return false;
-  }
-
-  ttfFontLoaded = true;
-  return true;
-}
-
-void GfxRenderer::drawTextTTF(int x, int y, const char* text, int fontSize, bool black) {
-  if (!ttfFontLoaded || text == nullptr || *text == '\0') return;
-
-  // 1. Configure OFR
-  ofr.setFontSize(fontSize);
-  ofr.setFontColor(black ? 0 : 255, 255); // Background transparent
   
-  // 2. Set the "Logical" cursor position. 
-  // Do NOT rotate here. drawPixel handles rotation.
-  // TTF handles its own baseline positioning, so no ascender adjustment needed
-  ofr.setCursor(x, y);
+  uint8_t* fontData = static_cast<uint8_t*>(malloc(size));
+  
+  if (!fontData) {
+    f.close();
+    return; // RAM full, skip drop cap
+  }
+  
+  f.read(fontData, size);
+  f.close();
 
-  // 3. Create drawer object that implements the interface OpenFontRender expects
-  GfxRendererDrawer drawer(this, black);
-  ofr.setDrawer(drawer);
+  // 2. LOAD
+  if (ofr.loadFont(fontData, size) == 0) {
+    ofr.setFontSize(fontSize);
+    ofr.setFontColor(0, 255); // Black on Transparent
+    
+    // 3. DRAW
+    // Set cursor position (logical coordinates, drawPixel handles rotation)
+    ofr.setCursor(x, y);
+    
+    // Create drawer object
+    GfxRendererDrawer drawer(this, true); // true = black
+    ofr.setDrawer(drawer);
+    
+    ofr.printf("%s", text);
+    
+    // 4. UNLOAD
+    ofr.unloadFont(); 
+  }
 
-  // 4. Render
-  ofr.printf("%s", text);
+  // 5. FREE
+  free(fontData); 
 }

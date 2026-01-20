@@ -50,7 +50,6 @@ class GfxRenderer {
   uint8_t* bwBufferChunks[BW_BUFFER_NUM_CHUNKS] = {nullptr};
   std::map<int, EpdFontFamily> fontMap;
   OpenFontRender ofr;  // TTF font renderer
-  bool ttfFontLoaded = false;  // Track if TTF font is loaded
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, const int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
   void freeBwBufferChunks();
@@ -108,8 +107,7 @@ class GfxRenderer {
   void drawTextScaled2x(int fontId, int x, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   // TTF font rendering methods
-  bool loadTTFFont(const char* fontPath);  // Load TTF from SD card
-  void drawTextTTF(int x, int y, const char* text, int fontSize, bool black = true);
+  void drawDropCapTTF(int x, int y, const char* text, int fontSize);  // Load, render, unload TTF for drop caps
   int getSpaceWidth(int fontId) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
