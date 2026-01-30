@@ -15,7 +15,7 @@ namespace {
 constexpr uint8_t SETTINGS_FILE_VERSION = 1;
 // Increment this when adding new persisted settings fields
 constexpr uint8_t SETTINGS_COUNT = 26;
-constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
+constexpr char SETTINGS_FILE[] = "/.crosspoint/release.settings.bin";
 }  // namespace
 
 bool CrossPointSettings::saveToFile() const {
