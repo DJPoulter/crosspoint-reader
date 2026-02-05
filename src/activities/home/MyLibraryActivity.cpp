@@ -1,14 +1,14 @@
-#include "FileSelectionActivity.h"
+#include "MyLibraryActivity.h"
 
 #include <GfxRenderer.h>
 #include <SDCardManager.h>
 
 #include "MappedInputManager.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
 
 namespace {
-constexpr int PAGE_ITEMS = 23;
 constexpr int SKIP_PAGE_MS = 700;
 constexpr unsigned long GO_HOME_MS = 1000;
 }  // namespace
@@ -23,12 +23,12 @@ void sortFileList(std::vector<std::string>& strs) {
   });
 }
 
-void FileSelectionActivity::taskTrampoline(void* param) {
-  auto* self = static_cast<FileSelectionActivity*>(param);
+void MyLibraryActivity::taskTrampoline(void* param) {
+  auto* self = static_cast<MyLibraryActivity*>(param);
   self->displayTaskLoop();
 }
 
-void FileSelectionActivity::loadFiles() {
+void MyLibraryActivity::loadFiles() {
   files.clear();
 
   auto root = SdMan.open(basepath.c_str());
@@ -52,7 +52,8 @@ void FileSelectionActivity::loadFiles() {
     } else {
       auto filename = std::string(name);
       if (StringUtils::checkFileExtension(filename, ".epub") || StringUtils::checkFileExtension(filename, ".xtch") ||
-          StringUtils::checkFileExtension(filename, ".xtc")) {
+          StringUtils::checkFileExtension(filename, ".xtc") || StringUtils::checkFileExtension(filename, ".txt") ||
+          StringUtils::checkFileExtension(filename, ".md")) {
         files.emplace_back(filename);
       }
     }
@@ -62,27 +63,25 @@ void FileSelectionActivity::loadFiles() {
   sortFileList(files);
 }
 
-void FileSelectionActivity::onEnter() {
+void MyLibraryActivity::onEnter() {
   Activity::onEnter();
 
   renderingMutex = xSemaphoreCreateMutex();
 
-  // basepath is set via constructor parameter (defaults to "/" if not specified)
   loadFiles();
-  selectorIndex = 0;
 
-  // Trigger first update
+  selectorIndex = 0;
   updateRequired = true;
 
-  xTaskCreate(&FileSelectionActivity::taskTrampoline, "FileSelectionActivityTask",
-              2048,               // Stack size
+  xTaskCreate(&MyLibraryActivity::taskTrampoline, "MyLibraryActivityTask",
+              4096,               // Stack size
               this,               // Parameters
               1,                  // Priority
               &displayTaskHandle  // Task handle
   );
 }
 
-void FileSelectionActivity::onExit() {
+void MyLibraryActivity::onExit() {
   Activity::onExit();
 
   // Wait until not rendering to delete task to avoid killing mid-instruction to EPD
@@ -93,26 +92,29 @@ void FileSelectionActivity::onExit() {
   }
   vSemaphoreDelete(renderingMutex);
   renderingMutex = nullptr;
+
   files.clear();
 }
 
-void FileSelectionActivity::loop() {
+void MyLibraryActivity::loop() {
   // Long press BACK (1s+) goes to root folder
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
-    if (basepath != "/") {
-      basepath = "/";
-      loadFiles();
-      updateRequired = true;
-    }
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS &&
+      basepath != "/") {
+    basepath = "/";
+    loadFiles();
+    selectorIndex = 0;
+    updateRequired = true;
     return;
   }
 
-  const bool prevReleased = mappedInput.wasReleased(MappedInputManager::Button::Up) ||
-                            mappedInput.wasReleased(MappedInputManager::Button::Left);
-  const bool nextReleased = mappedInput.wasReleased(MappedInputManager::Button::Down) ||
-                            mappedInput.wasReleased(MappedInputManager::Button::Right);
+  const bool upReleased = mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+                          mappedInput.wasReleased(MappedInputManager::Button::Up);
+  ;
+  const bool downReleased = mappedInput.wasReleased(MappedInputManager::Button::Right) ||
+                            mappedInput.wasReleased(MappedInputManager::Button::Down);
 
   const bool skipPage = mappedInput.getHeldTime() > SKIP_PAGE_MS;
+  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (files.empty()) {
@@ -126,9 +128,12 @@ void FileSelectionActivity::loop() {
       selectorIndex = 0;
       updateRequired = true;
     } else {
-      onSelect(basepath + files[selectorIndex]);
+      onSelectBook(basepath + files[selectorIndex]);
+      return;
     }
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // Short press: go up one directory, or go home if at root
     if (mappedInput.getHeldTime() < GO_HOME_MS) {
       if (basepath != "/") {
@@ -147,24 +152,27 @@ void FileSelectionActivity::loop() {
         onGoHome();
       }
     }
-  } else if (prevReleased) {
+  }
+
+  int listSize = static_cast<int>(files.size());
+  if (upReleased) {
     if (skipPage) {
-      selectorIndex = ((selectorIndex / PAGE_ITEMS - 1) * PAGE_ITEMS + files.size()) % files.size();
+      selectorIndex = ((selectorIndex / pageItems - 1) * pageItems + listSize) % listSize;
     } else {
-      selectorIndex = (selectorIndex + files.size() - 1) % files.size();
+      selectorIndex = (selectorIndex + listSize - 1) % listSize;
     }
     updateRequired = true;
-  } else if (nextReleased) {
+  } else if (downReleased) {
     if (skipPage) {
-      selectorIndex = ((selectorIndex / PAGE_ITEMS + 1) * PAGE_ITEMS) % files.size();
+      selectorIndex = ((selectorIndex / pageItems + 1) * pageItems) % listSize;
     } else {
-      selectorIndex = (selectorIndex + 1) % files.size();
+      selectorIndex = (selectorIndex + 1) % listSize;
     }
     updateRequired = true;
   }
 }
 
-void FileSelectionActivity::displayTaskLoop() {
+void MyLibraryActivity::displayTaskLoop() {
   while (true) {
     if (updateRequired) {
       updateRequired = false;
@@ -176,33 +184,34 @@ void FileSelectionActivity::displayTaskLoop() {
   }
 }
 
-void FileSelectionActivity::render() const {
+void MyLibraryActivity::render() const {
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "Books", true, EpdFontFamily::BOLD);
+  const auto pageHeight = renderer.getScreenHeight();
+  auto metrics = UITheme::getInstance().getMetrics();
+
+  auto folderName = basepath == "/" ? "SD card" : basepath.substr(basepath.rfind('/') + 1).c_str();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName);
+
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  if (files.empty()) {
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, "No books found");
+  } else {
+    GUI.drawList(
+        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
+        [this](int index) { return files[index]; }, nullptr, nullptr, nullptr);
+  }
 
   // Help text
-  const auto labels = mappedInput.mapLabels("« Home", "Open", "", "");
-  renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  if (files.empty()) {
-    renderer.drawText(UI_10_FONT_ID, 20, 60, "No books found");
-    renderer.displayBuffer();
-    return;
-  }
-
-  const auto pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
-  renderer.fillRect(0, 60 + (selectorIndex % PAGE_ITEMS) * 30 - 2, pageWidth - 1, 30);
-  for (size_t i = pageStartIndex; i < files.size() && i < pageStartIndex + PAGE_ITEMS; i++) {
-    auto item = renderer.truncatedText(UI_10_FONT_ID, files[i].c_str(), renderer.getScreenWidth() - 40);
-    renderer.drawText(UI_10_FONT_ID, 20, 60 + (i % PAGE_ITEMS) * 30, item.c_str(), i != selectorIndex);
-  }
+  const auto labels = mappedInput.mapLabels("« Home", "Open", "Up", "Down");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
 }
 
-size_t FileSelectionActivity::findEntry(const std::string& name) const {
+size_t MyLibraryActivity::findEntry(const std::string& name) const {
   for (size_t i = 0; i < files.size(); i++)
     if (files[i] == name) return i;
   return 0;

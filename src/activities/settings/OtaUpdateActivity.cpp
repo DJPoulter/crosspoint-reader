@@ -5,6 +5,7 @@
 
 #include "MappedInputManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/OtaUpdater.h"
 
@@ -97,7 +98,7 @@ void OtaUpdateActivity::onExit() {
 
 void OtaUpdateActivity::displayTaskLoop() {
   while (true) {
-    if (updateRequired) {
+    if (updateRequired || updater.getRender()) {
       updateRequired = false;
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       render();
@@ -115,8 +116,9 @@ void OtaUpdateActivity::render() {
 
   float updaterProgress = 0;
   if (state == UPDATE_IN_PROGRESS) {
-    Serial.printf("[%lu] [OTA] Update progress: %d / %d\n", millis(), updater.processedSize, updater.totalSize);
-    updaterProgress = static_cast<float>(updater.processedSize) / static_cast<float>(updater.totalSize);
+    Serial.printf("[%lu] [OTA] Update progress: %d / %d\n", millis(), updater.getProcessedSize(),
+                  updater.getTotalSize());
+    updaterProgress = static_cast<float>(updater.getProcessedSize()) / static_cast<float>(updater.getTotalSize());
     // Only update every 2% at the most
     if (static_cast<int>(updaterProgress * 50) == lastUpdaterPercentage / 2) {
       return;
@@ -141,7 +143,7 @@ void OtaUpdateActivity::render() {
     renderer.drawText(UI_10_FONT_ID, 20, 270, ("New Version: " + updater.getLatestVersion()).c_str());
 
     const auto labels = mappedInput.mapLabels("Cancel", "Update", "", "");
-    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
@@ -154,7 +156,7 @@ void OtaUpdateActivity::render() {
                               (std::to_string(static_cast<int>(updaterProgress * 100)) + "%").c_str());
     renderer.drawCenteredText(
         UI_10_FONT_ID, 440,
-        (std::to_string(updater.processedSize) + " / " + std::to_string(updater.totalSize)).c_str());
+        (std::to_string(updater.getProcessedSize()) + " / " + std::to_string(updater.getTotalSize())).c_str());
     renderer.displayBuffer();
     return;
   }
@@ -194,7 +196,7 @@ void OtaUpdateActivity::loop() {
       xSemaphoreGive(renderingMutex);
       updateRequired = true;
       vTaskDelay(10 / portTICK_PERIOD_MS);
-      const auto res = updater.installUpdate([this](const size_t, const size_t) { updateRequired = true; });
+      const auto res = updater.installUpdate();
 
       if (res != OtaUpdater::OK) {
         Serial.printf("[%lu] [OTA] Update failed: %d\n", millis(), res);

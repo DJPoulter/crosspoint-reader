@@ -13,11 +13,10 @@ class CrossPointSettings;
 
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE };
 
-// Structure to hold setting information
 struct SettingInfo {
-  const char* name;                        // Display name of the setting
-  SettingType type;                        // Type of setting
-  uint8_t CrossPointSettings::* valuePtr;  // Pointer to member in CrossPointSettings (for TOGGLE/ENUM/VALUE)
+  const char* name;
+  SettingType type;
+  uint8_t CrossPointSettings::* valuePtr;
   std::vector<std::string> enumValues;
 
   struct ValueRange {
@@ -25,10 +24,8 @@ struct SettingInfo {
     uint8_t max;
     uint8_t step;
   };
-  // Bounds/step for VALUE type settings
   ValueRange valueRange;
 
-  // Static constructors
   static SettingInfo Toggle(const char* name, uint8_t CrossPointSettings::* ptr) {
     return {name, SettingType::TOGGLE, ptr};
   }
@@ -48,12 +45,20 @@ class SettingsActivity final : public ActivityWithSubactivity {
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
   bool updateRequired = false;
-  int selectedSettingIndex = 0;  // Currently selected setting
+  int selectedCategoryIndex = 0;  // Currently selected category
+  int selectedSettingIndex = 0;
+  int settingsCount = 0;
+  const SettingInfo* settingsList = nullptr;
+
   const std::function<void()> onGoHome;
+
+  static constexpr int categoryCount = 4;
+  static const char* categoryNames[categoryCount];
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
   void render() const;
+  void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
 
  public:

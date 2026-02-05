@@ -8,6 +8,7 @@
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 
 void WifiSelectionActivity::taskTrampoline(void* param) {
@@ -36,6 +37,14 @@ void WifiSelectionActivity::onEnter() {
   usedSavedPassword = false;
   savePromptSelection = 0;
   forgetPromptSelection = 0;
+
+  // Cache MAC address for display
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char macStr[32];
+  snprintf(macStr, sizeof(macStr), "MAC address: %02x-%02x-%02x-%02x-%02x-%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
+           mac[5]);
+  cachedMacAddress = std::string(macStr);
 
   // Trigger first update to show scanning message
   updateRequired = true;
@@ -258,9 +267,9 @@ void WifiSelectionActivity::checkConnectionStatus() {
   }
 
   if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
-    connectionError = "Connection failed";
+    connectionError = "Error: General failure";
     if (status == WL_NO_SSID_AVAIL) {
-      connectionError = "Network not found";
+      connectionError = "Error: Network not found";
     }
     state = WifiSelectionState::CONNECTION_FAILED;
     updateRequired = true;
@@ -270,7 +279,7 @@ void WifiSelectionActivity::checkConnectionStatus() {
   // Check for timeout
   if (millis() - connectionStartTime > CONNECTION_TIMEOUT_MS) {
     WiFi.disconnect();
-    connectionError = "Connection timeout";
+    connectionError = "Error: Connection timeout";
     state = WifiSelectionState::CONNECTION_FAILED;
     updateRequired = true;
     return;
@@ -346,8 +355,8 @@ void WifiSelectionActivity::loop() {
         updateRequired = true;
       }
     } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      if (forgetPromptSelection == 0) {
-        // User chose "Yes" - forget the network
+      if (forgetPromptSelection == 1) {
+        // User chose "Forget network" - forget the network
         xSemaphoreTake(renderingMutex, portMAX_DELAY);
         WIFI_STORE.removeCredential(selectedSSID);
         xSemaphoreGive(renderingMutex);
@@ -358,7 +367,7 @@ void WifiSelectionActivity::loop() {
           network->hasSavedPassword = false;
         }
       }
-      // Go back to network list
+      // Go back to network list (whether Cancel or Forget network was selected)
       state = WifiSelectionState::NETWORK_LIST;
       updateRequired = true;
     } else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
@@ -383,7 +392,7 @@ void WifiSelectionActivity::loop() {
       // If we used saved credentials, offer to forget the network
       if (usedSavedPassword) {
         state = WifiSelectionState::FORGET_PROMPT;
-        forgetPromptSelection = 0;  // Default to "Yes"
+        forgetPromptSelection = 0;  // Default to "Cancel"
       } else {
         // Go back to network list on failure
         state = WifiSelectionState::NETWORK_LIST;
@@ -512,7 +521,7 @@ void WifiSelectionActivity::renderNetworkList() const {
     const auto height = renderer.getLineHeight(UI_10_FONT_ID);
     const auto top = (pageHeight - height) / 2;
     renderer.drawCenteredText(UI_10_FONT_ID, top, "No networks found");
-    renderer.drawCenteredText(SMALL_FONT_ID, top + height + 10, "Press OK to scan again");
+    renderer.drawCenteredText(SMALL_FONT_ID, top + height + 10, "Press Connect to scan again");
   } else {
     // Calculate how many networks we can display
     constexpr int startY = 60;
@@ -538,8 +547,8 @@ void WifiSelectionActivity::renderNetworkList() const {
 
       // Draw network name (truncate if too long)
       std::string displayName = network.ssid;
-      if (displayName.length() > 16) {
-        displayName.replace(13, displayName.length() - 13, "...");
+      if (displayName.length() > 33) {
+        displayName.replace(30, displayName.length() - 30, "...");
       }
       renderer.drawText(UI_10_FONT_ID, 20, networkY, displayName.c_str());
 
@@ -572,10 +581,13 @@ void WifiSelectionActivity::renderNetworkList() const {
     renderer.drawText(SMALL_FONT_ID, 20, pageHeight - 90, countStr);
   }
 
+  // Show MAC address above the network count and legend
+  renderer.drawText(SMALL_FONT_ID, 20, pageHeight - 105, cachedMacAddress.c_str());
+
   // Draw help text
   renderer.drawText(SMALL_FONT_ID, 20, pageHeight - 75, "* = Encrypted | + = Saved");
   const auto labels = mappedInput.mapLabels("« Back", "Connect", "", "");
-  renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void WifiSelectionActivity::renderConnecting() const {
@@ -612,7 +624,9 @@ void WifiSelectionActivity::renderConnected() const {
   const std::string ipInfo = "IP Address: " + connectedIP;
   renderer.drawCenteredText(UI_10_FONT_ID, top + 40, ipInfo.c_str());
 
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, "Press any button to continue");
+  // Use centralized button hints
+  const auto labels = mappedInput.mapLabels("", "Continue", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void WifiSelectionActivity::renderSavePrompt() const {
@@ -652,7 +666,9 @@ void WifiSelectionActivity::renderSavePrompt() const {
     renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, "No");
   }
 
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, "LEFT/RIGHT: Select | OK: Confirm");
+  // Use centralized button hints
+  const auto labels = mappedInput.mapLabels("« Skip", "Select", "Left", "Right");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void WifiSelectionActivity::renderConnectionFailed() const {
@@ -662,7 +678,10 @@ void WifiSelectionActivity::renderConnectionFailed() const {
 
   renderer.drawCenteredText(UI_12_FONT_ID, top - 20, "Connection Failed", true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, top + 20, connectionError.c_str());
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, "Press any button to continue");
+
+  // Use centralized button hints
+  const auto labels = mappedInput.mapLabels("« Back", "Continue", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void WifiSelectionActivity::renderForgetPrompt() const {
@@ -671,7 +690,7 @@ void WifiSelectionActivity::renderForgetPrompt() const {
   const auto height = renderer.getLineHeight(UI_10_FONT_ID);
   const auto top = (pageHeight - height * 3) / 2;
 
-  renderer.drawCenteredText(UI_12_FONT_ID, top - 40, "Forget Network?", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, top - 40, "Connection Failed", true, EpdFontFamily::BOLD);
 
   std::string ssidInfo = "Network: " + selectedSSID;
   if (ssidInfo.length() > 28) {
@@ -679,28 +698,30 @@ void WifiSelectionActivity::renderForgetPrompt() const {
   }
   renderer.drawCenteredText(UI_10_FONT_ID, top, ssidInfo.c_str());
 
-  renderer.drawCenteredText(UI_10_FONT_ID, top + 40, "Remove saved password?");
+  renderer.drawCenteredText(UI_10_FONT_ID, top + 40, "Forget network and remove saved password?");
 
-  // Draw Yes/No buttons
+  // Draw Cancel/Forget network buttons
   const int buttonY = top + 80;
-  constexpr int buttonWidth = 60;
+  constexpr int buttonWidth = 120;
   constexpr int buttonSpacing = 30;
   constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
   const int startX = (pageWidth - totalWidth) / 2;
 
-  // Draw "Yes" button
+  // Draw "Cancel" button
   if (forgetPromptSelection == 0) {
-    renderer.drawText(UI_10_FONT_ID, startX, buttonY, "[Yes]");
+    renderer.drawText(UI_10_FONT_ID, startX, buttonY, "[Cancel]");
   } else {
-    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, "Yes");
+    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, "Cancel");
   }
 
-  // Draw "No" button
+  // Draw "Forget network" button
   if (forgetPromptSelection == 1) {
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, "[No]");
+    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, "[Forget network]");
   } else {
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, "No");
+    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, "Forget network");
   }
 
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, "LEFT/RIGHT: Select | OK: Confirm");
+  // Use centralized button hints
+  const auto labels = mappedInput.mapLabels("« Back", "Select", "Left", "Right");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

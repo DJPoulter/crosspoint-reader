@@ -9,30 +9,38 @@
 
 #include "../Activity.h"
 
-class FileSelectionActivity final : public Activity {
+class MyLibraryActivity final : public Activity {
+ private:
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
-  std::string basepath = "/";
-  std::vector<std::string> files;
+
   size_t selectorIndex = 0;
   bool updateRequired = false;
-  const std::function<void(const std::string&)> onSelect;
+
+  // Files state
+  std::string basepath = "/";
+  std::vector<std::string> files;
+
+  // Callbacks
+  const std::function<void(const std::string& path)> onSelectBook;
   const std::function<void()> onGoHome;
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
   void render() const;
-  void loadFiles();
 
+  // Data loading
+  void loadFiles();
   size_t findEntry(const std::string& name) const;
 
  public:
-  explicit FileSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                 const std::function<void(const std::string&)>& onSelect,
-                                 const std::function<void()>& onGoHome, std::string initialPath = "/")
-      : Activity("FileSelection", renderer, mappedInput),
+  explicit MyLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                             const std::function<void()>& onGoHome,
+                             const std::function<void(const std::string& path)>& onSelectBook,
+                             std::string initialPath = "/")
+      : Activity("MyLibrary", renderer, mappedInput),
         basepath(initialPath.empty() ? "/" : std::move(initialPath)),
-        onSelect(onSelect),
+        onSelectBook(onSelectBook),
         onGoHome(onGoHome) {}
   void onEnter() override;
   void onExit() override;

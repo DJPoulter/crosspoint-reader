@@ -3,43 +3,65 @@
 #include <GfxRenderer.h>
 #include <HardwareSerial.h>
 
-#include <cstring>
-
+#include "ButtonRemapActivity.h"
 #include "CalibreSettingsActivity.h"
+#include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
+#include "KOReaderSettingsActivity.h"
 #include "MappedInputManager.h"
 #include "OtaUpdateActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 
-// Define the static settings list
+const char* SettingsActivity::categoryNames[categoryCount] = {"Display", "Reader", "Controls", "System"};
+
 namespace {
-constexpr int settingsCount = 18;
-const SettingInfo settingsList[settingsCount] = {
+constexpr int changeTabsMs = 700;
+constexpr int displaySettingsCount = 8;
+const SettingInfo displaySettings[displaySettingsCount] = {
     // Should match with SLEEP_SCREEN_MODE
-    SettingInfo::Enum("Sleep Screen", &CrossPointSettings::sleepScreen, {"Dark", "Light", "Custom", "Cover", "None", "Overlay"}),
+    SettingInfo::Enum("Sleep Screen", &CrossPointSettings::sleepScreen,
+                      {"Dark", "Light", "Custom", "Cover", "None", "Cover + Custom", "Overlay"}),
     SettingInfo::Enum("Sleep Screen Cover Mode", &CrossPointSettings::sleepScreenCoverMode, {"Fit", "Crop"}),
-    SettingInfo::Enum("Status Bar", &CrossPointSettings::statusBar, {"None", "No Progress", "Full"}),
-    SettingInfo::Toggle("Extra Paragraph Spacing", &CrossPointSettings::extraParagraphSpacing),
-    SettingInfo::Toggle("Text Anti-Aliasing", &CrossPointSettings::textAntiAliasing),
-    SettingInfo::Toggle("Short Power Button Click", &CrossPointSettings::shortPwrBtn),
-    SettingInfo::Enum("Reading Orientation", &CrossPointSettings::orientation,
-                      {"Portrait", "Landscape CW", "Inverted", "Landscape CCW"}),
-    SettingInfo::Enum("Front Button Layout", &CrossPointSettings::frontButtonLayout,
-                      {"Bck, Cnfrm, Lft, Rght", "Lft, Rght, Bck, Cnfrm", "Lft, Bck, Cnfrm, Rght"}),
-    SettingInfo::Enum("Side Button Layout (reader)", &CrossPointSettings::sideButtonLayout,
-                      {"Prev, Next", "Next, Prev"}),
-    SettingInfo::Enum("Reader Font Family", &CrossPointSettings::fontFamily,
-                      {"Bookerly", "Noto Sans", "Open Dyslexic"}),
-    SettingInfo::Enum("Reader Font Size", &CrossPointSettings::fontSize, {"Small", "Medium", "Large", "X Large"}),
-    SettingInfo::Enum("Reader Line Spacing", &CrossPointSettings::lineSpacing, {"Tight", "Normal", "Wide"}),
-    SettingInfo::Value("Reader Screen Margin", &CrossPointSettings::screenMargin, {5, 40, 5}),
-    SettingInfo::Enum("Reader Paragraph Alignment", &CrossPointSettings::paragraphAlignment,
-                      {"Justify", "Left", "Center", "Right"}),
-    SettingInfo::Enum("Time to Sleep", &CrossPointSettings::sleepTimeout,
-                      {"1 min", "5 min", "10 min", "15 min", "30 min"}),
+    SettingInfo::Enum("Sleep Screen Cover Filter", &CrossPointSettings::sleepScreenCoverFilter,
+                      {"None", "Contrast", "Inverted"}),
+    SettingInfo::Enum("Status Bar", &CrossPointSettings::statusBar,
+                      {"None", "No Progress", "Full w/ Percentage", "Full w/ Progress Bar", "Progress Bar"}),
+    SettingInfo::Enum("Hide Battery %", &CrossPointSettings::hideBatteryPercentage, {"Never", "In Reader", "Always"}),
     SettingInfo::Enum("Refresh Frequency", &CrossPointSettings::refreshFrequency,
                       {"1 page", "5 pages", "10 pages", "15 pages", "30 pages"}),
-    SettingInfo::Action("Calibre Settings"),
+    SettingInfo::Enum("UI Theme", &CrossPointSettings::uiTheme, {"Classic", "Lyra"}),
+    SettingInfo::Toggle("Sunlight Fading Fix", &CrossPointSettings::fadingFix),
+};
+
+constexpr int readerSettingsCount = 9;
+const SettingInfo readerSettings[readerSettingsCount] = {
+    SettingInfo::Enum("Font Family", &CrossPointSettings::fontFamily, {"Bookerly", "Noto Sans", "Open Dyslexic"}),
+    SettingInfo::Enum("Font Size", &CrossPointSettings::fontSize, {"Small", "Medium", "Large", "X Large"}),
+    SettingInfo::Enum("Line Spacing", &CrossPointSettings::lineSpacing, {"Tight", "Normal", "Wide"}),
+    SettingInfo::Value("Screen Margin", &CrossPointSettings::screenMargin, {5, 40, 5}),
+    SettingInfo::Enum("Paragraph Alignment", &CrossPointSettings::paragraphAlignment,
+                      {"Justify", "Left", "Center", "Right"}),
+    SettingInfo::Toggle("Hyphenation", &CrossPointSettings::hyphenationEnabled),
+    SettingInfo::Enum("Reading Orientation", &CrossPointSettings::orientation,
+                      {"Portrait", "Landscape CW", "Inverted", "Landscape CCW"}),
+    SettingInfo::Toggle("Extra Paragraph Spacing", &CrossPointSettings::extraParagraphSpacing),
+    SettingInfo::Toggle("Text Anti-Aliasing", &CrossPointSettings::textAntiAliasing)};
+
+constexpr int controlsSettingsCount = 4;
+const SettingInfo controlsSettings[controlsSettingsCount] = {
+    // Launches the remap wizard for front buttons.
+    SettingInfo::Action("Remap Front Buttons"),
+    SettingInfo::Enum("Side Button Layout (reader)", &CrossPointSettings::sideButtonLayout,
+                      {"Prev, Next", "Next, Prev"}),
+    SettingInfo::Toggle("Long-press Chapter Skip", &CrossPointSettings::longPressChapterSkip),
+    SettingInfo::Enum("Short Power Button Click", &CrossPointSettings::shortPwrBtn, {"Ignore", "Sleep", "Page Turn"})};
+
+constexpr int systemSettingsCount = 5;
+const SettingInfo systemSettings[systemSettingsCount] = {
+    SettingInfo::Enum("Time to Sleep", &CrossPointSettings::sleepTimeout,
+                      {"1 min", "5 min", "10 min", "15 min", "30 min"}),
+    SettingInfo::Action("KOReader Sync"), SettingInfo::Action("OPDS Browser"), SettingInfo::Action("Clear Cache"),
     SettingInfo::Action("Check for updates")};
 }  // namespace
 
@@ -52,8 +74,13 @@ void SettingsActivity::onEnter() {
   Activity::onEnter();
   renderingMutex = xSemaphoreCreateMutex();
 
-  // Reset selection to first item
+  // Reset selection to first category
+  selectedCategoryIndex = 0;
   selectedSettingIndex = 0;
+
+  // Initialize with first category (Display)
+  settingsList = displaySettings;
+  settingsCount = displaySettingsCount;
 
   // Trigger first update
   updateRequired = true;
@@ -77,6 +104,8 @@ void SettingsActivity::onExit() {
   }
   vSemaphoreDelete(renderingMutex);
   renderingMutex = nullptr;
+
+  UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
 void SettingsActivity::loop() {
@@ -84,12 +113,19 @@ void SettingsActivity::loop() {
     subActivity->loop();
     return;
   }
+  bool hasChangedCategory = false;
 
   // Handle actions with early return
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    toggleCurrentSetting();
-    updateRequired = true;
-    return;
+    if (selectedSettingIndex == 0) {
+      selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
+      hasChangedCategory = true;
+      updateRequired = true;
+    } else {
+      toggleCurrentSetting();
+      updateRequired = true;
+      return;
+    }
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
@@ -98,27 +134,59 @@ void SettingsActivity::loop() {
     return;
   }
 
+  const bool upReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
+  const bool downReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
+  const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
+  const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
+  const bool changeTab = mappedInput.getHeldTime() > changeTabsMs;
+
   // Handle navigation
-  if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
-      mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-    // Move selection up (with wrap-around)
-    selectedSettingIndex = (selectedSettingIndex > 0) ? (selectedSettingIndex - 1) : (settingsCount - 1);
+  if (upReleased && changeTab) {
+    hasChangedCategory = true;
+    selectedCategoryIndex = (selectedCategoryIndex > 0) ? (selectedCategoryIndex - 1) : (categoryCount - 1);
     updateRequired = true;
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) ||
-             mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-    // Move selection down (with wrap around)
-    selectedSettingIndex = (selectedSettingIndex < settingsCount - 1) ? (selectedSettingIndex + 1) : 0;
+  } else if (downReleased && changeTab) {
+    hasChangedCategory = true;
+    selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
     updateRequired = true;
+  } else if (upReleased || leftReleased) {
+    selectedSettingIndex = (selectedSettingIndex > 0) ? (selectedSettingIndex - 1) : (settingsCount);
+    updateRequired = true;
+  } else if (rightReleased || downReleased) {
+    selectedSettingIndex = (selectedSettingIndex < settingsCount) ? (selectedSettingIndex + 1) : 0;
+    updateRequired = true;
+  }
+
+  if (hasChangedCategory) {
+    selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
+    switch (selectedCategoryIndex) {
+      case 0:  // Display
+        settingsList = displaySettings;
+        settingsCount = displaySettingsCount;
+        break;
+      case 1:  // Reader
+        settingsList = readerSettings;
+        settingsCount = readerSettingsCount;
+        break;
+      case 2:  // Controls
+        settingsList = controlsSettings;
+        settingsCount = controlsSettingsCount;
+        break;
+      case 3:  // System
+        settingsList = systemSettings;
+        settingsCount = systemSettingsCount;
+        break;
+    }
   }
 }
 
 void SettingsActivity::toggleCurrentSetting() {
-  // Validate index
-  if (selectedSettingIndex < 0 || selectedSettingIndex >= settingsCount) {
+  int selectedSetting = selectedSettingIndex - 1;
+  if (selectedSetting < 0 || selectedSetting >= settingsCount) {
     return;
   }
 
-  const auto& setting = settingsList[selectedSettingIndex];
+  const auto& setting = settingsList[selectedSetting];
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
@@ -128,19 +196,41 @@ void SettingsActivity::toggleCurrentSetting() {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-    // Decreasing would also be nice for large ranges I think but oh well can't have everything
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
-    // Wrap to minValue if exceeding setting value boundary
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {
       SETTINGS.*(setting.valuePtr) = setting.valueRange.min;
     } else {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    if (strcmp(setting.name, "Calibre Settings") == 0) {
+    if (strcmp(setting.name, "Remap Front Buttons") == 0) {
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      enterNewActivity(new ButtonRemapActivity(renderer, mappedInput, [this] {
+        exitActivity();
+        updateRequired = true;
+      }));
+      xSemaphoreGive(renderingMutex);
+    } else if (strcmp(setting.name, "KOReader Sync") == 0) {
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      enterNewActivity(new KOReaderSettingsActivity(renderer, mappedInput, [this] {
+        exitActivity();
+        updateRequired = true;
+      }));
+      xSemaphoreGive(renderingMutex);
+    } else if (strcmp(setting.name, "OPDS Browser") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
       enterNewActivity(new CalibreSettingsActivity(renderer, mappedInput, [this] {
+        exitActivity();
+        updateRequired = true;
+      }));
+      xSemaphoreGive(renderingMutex);
+    } else if (strcmp(setting.name, "Clear Cache") == 0) {
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      enterNewActivity(new ClearCacheActivity(renderer, mappedInput, [this] {
         exitActivity();
         updateRequired = true;
       }));
@@ -155,11 +245,9 @@ void SettingsActivity::toggleCurrentSetting() {
       xSemaphoreGive(renderingMutex);
     }
   } else {
-    // Only toggle if it's a toggle type and has a value pointer
     return;
   }
 
-  // Save settings when they change
   SETTINGS.saveToFile();
 }
 
@@ -181,41 +269,48 @@ void SettingsActivity::render() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  // Draw header
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "Settings", true, EpdFontFamily::BOLD);
+  auto metrics = UITheme::getInstance().getMetrics();
 
-  // Draw selection
-  renderer.fillRect(0, 60 + selectedSettingIndex * 30 - 2, pageWidth - 1, 30);
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, "Settings");
 
-  // Draw all settings
-  for (int i = 0; i < settingsCount; i++) {
-    const int settingY = 60 + i * 30;  // 30 pixels between settings
-
-    // Draw setting name
-    renderer.drawText(UI_10_FONT_ID, 20, settingY, settingsList[i].name, i != selectedSettingIndex);
-
-    // Draw value based on setting type
-    std::string valueText = "";
-    if (settingsList[i].type == SettingType::TOGGLE && settingsList[i].valuePtr != nullptr) {
-      const bool value = SETTINGS.*(settingsList[i].valuePtr);
-      valueText = value ? "ON" : "OFF";
-    } else if (settingsList[i].type == SettingType::ENUM && settingsList[i].valuePtr != nullptr) {
-      const uint8_t value = SETTINGS.*(settingsList[i].valuePtr);
-      valueText = settingsList[i].enumValues[value];
-    } else if (settingsList[i].type == SettingType::VALUE && settingsList[i].valuePtr != nullptr) {
-      valueText = std::to_string(SETTINGS.*(settingsList[i].valuePtr));
-    }
-    const auto width = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str());
-    renderer.drawText(UI_10_FONT_ID, pageWidth - 20 - width, settingY, valueText.c_str(), i != selectedSettingIndex);
+  std::vector<TabInfo> tabs;
+  tabs.reserve(categoryCount);
+  for (int i = 0; i < categoryCount; i++) {
+    tabs.push_back({categoryNames[i], selectedCategoryIndex == i});
   }
+  GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight}, tabs,
+                 selectedSettingIndex == 0);
 
-  // Draw version text above button hints
-  renderer.drawText(SMALL_FONT_ID, pageWidth - 20 - renderer.getTextWidth(SMALL_FONT_ID, CROSSPOINT_VERSION),
-                    pageHeight - 60, CROSSPOINT_VERSION);
+  GUI.drawList(
+      renderer,
+      Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
+           pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
+                         metrics.verticalSpacing * 2)},
+      settingsCount, selectedSettingIndex - 1, [this](int index) { return std::string(settingsList[index].name); },
+      nullptr, nullptr,
+      [this](int i) {
+        const auto& setting = settingsList[i];
+        std::string valueText = "";
+        if (settingsList[i].type == SettingType::TOGGLE && settingsList[i].valuePtr != nullptr) {
+          const bool value = SETTINGS.*(settingsList[i].valuePtr);
+          valueText = value ? "ON" : "OFF";
+        } else if (settingsList[i].type == SettingType::ENUM && settingsList[i].valuePtr != nullptr) {
+          const uint8_t value = SETTINGS.*(settingsList[i].valuePtr);
+          valueText = settingsList[i].enumValues[value];
+        } else if (settingsList[i].type == SettingType::VALUE && settingsList[i].valuePtr != nullptr) {
+          valueText = std::to_string(SETTINGS.*(settingsList[i].valuePtr));
+        }
+        return valueText;
+      });
+
+  // Draw version text
+  renderer.drawText(SMALL_FONT_ID,
+                    pageWidth - metrics.versionTextRightX - renderer.getTextWidth(SMALL_FONT_ID, CROSSPOINT_VERSION),
+                    metrics.versionTextY, CROSSPOINT_VERSION);
 
   // Draw help text
-  const auto labels = mappedInput.mapLabels("« Save", "Toggle", "", "");
-  renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  const auto labels = mappedInput.mapLabels("« Back", "Toggle", "Up", "Down");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Always use standard refresh for settings screen
   renderer.displayBuffer();

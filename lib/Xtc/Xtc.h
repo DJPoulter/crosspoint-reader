@@ -56,12 +56,17 @@ class Xtc {
 
   // Metadata
   std::string getTitle() const;
+  std::string getAuthor() const;
   bool hasChapters() const;
   const std::vector<xtc::ChapterInfo>& getChapters() const;
 
   // Cover image support (for sleep screen)
   std::string getCoverBmpPath() const;
   bool generateCoverBmp() const;
+  // Thumbnail support (for Continue Reading card)
+  std::string getThumbBmpPath() const;
+  std::string getThumbBmpPath(int height) const;
+  bool generateThumbBmp(int height) const;
 
   // Page access
   uint32_t getPageCount() const;
