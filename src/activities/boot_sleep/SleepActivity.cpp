@@ -19,23 +19,14 @@ void SleepActivity::onEnter() {
   Activity::onEnter();
 
   if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY) {
-    Serial.printf("[%lu] [SLP] Entering overlay sleep mode\n", millis());
     isOnBook = (previousActivityName == "EpubReader" || previousActivityName == "XtcReader" || previousActivityName == "Reader");
-    Serial.printf("[%lu] [SLP] Overlay mode: previousActivity='%s', isOnBook=%d\n",
-                  millis(), previousActivityName.c_str(), isOnBook);
-
     if (isOnBook) {
       if (!renderer.storeBwBuffer()) {
-        Serial.printf("[%lu] [SLP] Failed to store BW buffer, treating as not on book\n", millis());
         isOnBook = false;
       }
     }
-
     if (!isOnBook) {
-      Serial.printf("[%lu] [SLP] Not on book - clearing screen to black\n", millis());
       renderer.clearScreen(0x00);
-    } else {
-      Serial.printf("[%lu] [SLP] On book - framebuffer stored, will restore before overlay\n", millis());
     }
     GUI.drawPopup(renderer, "Entering Sleep...");
     return renderOverlaySleepScreen();
@@ -56,13 +47,11 @@ void SleepActivity::onEnter() {
   }
 }
 
-void SleepActivity::renderCustomSleepScreen() const {
-  // Check if we have a /sleep directory
+bool SleepActivity::openSleepImage(FsFile& outFile) const {
   auto dir = SdMan.open("/sleep");
   if (dir && dir.isDirectory()) {
     std::vector<std::string> files;
     char name[500];
-    // collect all valid BMP files
     for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
       if (file.isDirectory()) {
         file.close();
@@ -74,60 +63,56 @@ void SleepActivity::renderCustomSleepScreen() const {
         file.close();
         continue;
       }
-
       if (filename.substr(filename.length() - 4) != ".bmp") {
-        Serial.printf("[%lu] [SLP] Skipping non-.bmp file name: %s\n", millis(), name);
         file.close();
         continue;
       }
       Bitmap bitmap(file);
       if (bitmap.parseHeaders() != BmpReaderError::Ok) {
-        Serial.printf("[%lu] [SLP] Skipping invalid BMP file: %s\n", millis(), name);
         file.close();
         continue;
       }
       files.emplace_back(filename);
       file.close();
     }
+    dir.close();
     const auto numFiles = files.size();
     if (numFiles > 0) {
-      // Generate a random number between 1 and numFiles
-      auto randomFileIndex = random(numFiles);
-      // If we picked the same image as last time, reroll
+      auto randomFileIndex = static_cast<size_t>(random(numFiles));
       while (numFiles > 1 && randomFileIndex == APP_STATE.lastSleepImage) {
-        randomFileIndex = random(numFiles);
+        randomFileIndex = static_cast<size_t>(random(numFiles));
       }
       APP_STATE.lastSleepImage = randomFileIndex;
       APP_STATE.saveToFile();
-      const auto filename = "/sleep/" + files[randomFileIndex];
-      FsFile file;
-      if (SdMan.openFileForRead("SLP", filename, file)) {
-        Serial.printf("[%lu] [SLP] Randomly loading: /sleep/%s\n", millis(), files[randomFileIndex].c_str());
-        delay(100);
-        Bitmap bitmap(file, true);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          renderBitmapSleepScreen(bitmap);
-          dir.close();
-          return;
-        }
+      const auto path = "/sleep/" + files[randomFileIndex];
+      if (SdMan.openFileForRead("SLP", path, outFile)) {
+        Serial.printf("[%lu] [SLP] Loading: /sleep/%s\n", millis(), files[randomFileIndex].c_str());
+        return true;
       }
     }
+    return false;
   }
   if (dir) dir.close();
-
-  // Look for sleep.bmp on the root of the sd card to determine if we should
-  // render a custom sleep screen instead of the default.
-  FsFile file;
-  if (SdMan.openFileForRead("SLP", "/sleep.bmp", file)) {
-    Bitmap bitmap(file, true);
-    if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-      Serial.printf("[%lu] [SLP] Loading: /sleep.bmp\n", millis());
-      renderBitmapSleepScreen(bitmap);
-      return;
-    }
+  if (SdMan.openFileForRead("SLP", "/sleep.bmp", outFile)) {
+    Serial.printf("[%lu] [SLP] Loading: /sleep.bmp\n", millis());
+    return true;
   }
+  return false;
+}
 
-  renderDefaultSleepScreen();
+void SleepActivity::renderCustomSleepScreen() const {
+  FsFile file;
+  if (!openSleepImage(file)) {
+    renderDefaultSleepScreen();
+    return;
+  }
+  Bitmap bitmap(file, true);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+    file.close();
+    renderDefaultSleepScreen();
+    return;
+  }
+  renderBitmapSleepScreen(bitmap, true);
 }
 
 void SleepActivity::renderDefaultSleepScreen() const {
@@ -147,49 +132,51 @@ void SleepActivity::renderDefaultSleepScreen() const {
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
-void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
-  int x, y;
+void SleepActivity::getSleepBitmapLayout(const Bitmap& bitmap, int& x, int& y, float& cropX, float& cropY) const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  float cropX = 0, cropY = 0;
+  x = 0;
+  y = 0;
+  cropX = 0;
+  cropY = 0;
 
-  Serial.printf("[%lu] [SLP] bitmap %d x %d, screen %d x %d\n", millis(), bitmap.getWidth(), bitmap.getHeight(),
-                pageWidth, pageHeight);
   if (bitmap.getWidth() > pageWidth || bitmap.getHeight() > pageHeight) {
-    // image will scale, make sure placement is right
     float ratio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
     const float screenRatio = static_cast<float>(pageWidth) / static_cast<float>(pageHeight);
 
-    Serial.printf("[%lu] [SLP] bitmap ratio: %f, screen ratio: %f\n", millis(), ratio, screenRatio);
     if (ratio > screenRatio) {
-      // image wider than viewport ratio, scaled down image needs to be centered vertically
       if (SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
         cropX = 1.0f - (screenRatio / ratio);
-        Serial.printf("[%lu] [SLP] Cropping bitmap x: %f\n", millis(), cropX);
         ratio = (1.0f - cropX) * static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
       }
       x = 0;
       y = std::round((static_cast<float>(pageHeight) - static_cast<float>(pageWidth) / ratio) / 2);
-      Serial.printf("[%lu] [SLP] Centering with ratio %f to y=%d\n", millis(), ratio, y);
     } else {
-      // image taller than viewport ratio, scaled down image needs to be centered horizontally
       if (SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
         cropY = 1.0f - (ratio / screenRatio);
-        Serial.printf("[%lu] [SLP] Cropping bitmap y: %f\n", millis(), cropY);
         ratio = static_cast<float>(bitmap.getWidth()) / ((1.0f - cropY) * static_cast<float>(bitmap.getHeight()));
       }
       x = std::round((static_cast<float>(pageWidth) - static_cast<float>(pageHeight) * ratio) / 2);
       y = 0;
-      Serial.printf("[%lu] [SLP] Centering with ratio %f to x=%d\n", millis(), ratio, x);
     }
   } else {
-    // center the image
     x = (pageWidth - bitmap.getWidth()) / 2;
     y = (pageHeight - bitmap.getHeight()) / 2;
   }
+}
+
+void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, bool clearBeforeDraw) const {
+  int x, y;
+  float cropX = 0, cropY = 0;
+  getSleepBitmapLayout(bitmap, x, y, cropX, cropY);
+
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
 
   Serial.printf("[%lu] [SLP] drawing to %d x %d\n", millis(), x, y);
-  renderer.clearScreen();
+  if (clearBeforeDraw) {
+    renderer.clearScreen();
+  }
 
   const bool hasGreyscale = bitmap.hasGreyscale() &&
                             SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
@@ -202,7 +189,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
 
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 
-  if (hasGreyscale) {
+  if (clearBeforeDraw && hasGreyscale) {
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
@@ -301,145 +288,67 @@ void SleepActivity::renderCoverSleepScreen() const {
 }
 
 void SleepActivity::renderOverlaySleepScreen() const {
-  Serial.printf("[%lu] [SLP] renderOverlaySleepScreen: isOnBook=%d\n", millis(), isOnBook);
-  // If we're on a book, restore the book content (this removes the popup from framebuffer)
-  // If not on a book, the screen is already cleared to white
+  // Buffer is either popup on book (stored in onEnter) or popup on black; restore to get book or clear to black
   if (isOnBook) {
-    Serial.printf("[%lu] [SLP] Restoring book content framebuffer\n", millis());
     renderer.restoreBwBuffer();
   } else {
-    // Not on a book - clear screen to white so white pixels in overlay appear white
-    Serial.printf("[%lu] [SLP] Clearing screen to white (not on book)\n", millis());
-    renderer.clearScreen();
+    renderer.clearScreen(0x00);
   }
 
-  // Look for sleep.bmp or sleep folder
   FsFile overlayFile;
-  bool foundOverlay = false;
-  
-  // First check if we have a /sleep directory
-  auto dir = SdMan.open("/sleep");
-  if (dir && dir.isDirectory()) {
-    std::vector<std::string> files;
-    char name[500];
-    // collect all valid BMP files
-    for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
-      if (file.isDirectory()) {
-        file.close();
-        continue;
-      }
-      file.getName(name, sizeof(name));
-      auto filename = std::string(name);
-      if (filename[0] == '.') {
-        file.close();
-        continue;
-      }
-
-      if (filename.substr(filename.length() - 4) != ".bmp") {
-        file.close();
-        continue;
-      }
-      Bitmap bitmap(file);
-      if (bitmap.parseHeaders() != BmpReaderError::Ok) {
-        file.close();
-        continue;
-      }
-      files.emplace_back(filename);
-      file.close();
-    }
-    const auto numFiles = files.size();
-    if (numFiles > 0) {
-      // Generate a random number between 0 and numFiles-1
-      const auto randomFileIndex = random(numFiles);
-      const auto filename = "/sleep/" + files[randomFileIndex];
-      if (SdMan.openFileForRead("SLP", filename, overlayFile)) {
-        Serial.printf("[%lu] [SLP] Randomly loading: /sleep/%s\n", millis(), files[randomFileIndex].c_str());
-        foundOverlay = true;
-      }
-    }
-  }
-  if (dir) dir.close();
-
-  // If not found in /sleep folder, try /sleep.bmp on root
-  if (!foundOverlay) {
-    if (SdMan.openFileForRead("SLP", "/sleep.bmp", overlayFile)) {
-      Serial.printf("[%lu] [SLP] Loading: /sleep.bmp\n", millis());
-      foundOverlay = true;
-    }
-  }
-
-  if (!foundOverlay) {
-    Serial.printf("[%lu] [SLP] ERROR: Failed to find sleep.bmp or sleep folder, falling back to default sleep screen\n", millis());
+  if (!openSleepImage(overlayFile)) {
+    Serial.printf("[%lu] [SLP] No sleep image found, falling back to default\n", millis());
     renderDefaultSleepScreen();
     return;
   }
-  Serial.printf("[%lu] [SLP] Successfully opened sleep overlay file\n", millis());
 
   Bitmap overlay(overlayFile);
-  const BmpReaderError overlayError = overlay.parseHeaders();
-  if (overlayError != BmpReaderError::Ok) {
-    Serial.printf("[%lu] [SLP] ERROR: Failed to parse sleep overlay headers (error=%d), falling back to default\n", 
-                  millis(), static_cast<int>(overlayError));
+  if (overlay.parseHeaders() != BmpReaderError::Ok) {
     overlayFile.close();
     renderDefaultSleepScreen();
     return;
   }
-  Serial.printf("[%lu] [SLP] Overlay parsed: %dx%d, hasGreyscale=%d\n", millis(), 
-                overlay.getWidth(), overlay.getHeight(), overlay.hasGreyscale());
 
-  // Framebuffer now contains either book content (if on book) or white background (if not on book)
-  // Calculate position to center the overlay
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-  int x = (pageWidth - overlay.getWidth()) / 2;
-  int y = (pageHeight - overlay.getHeight()) / 2;
+  // Reuse same layout and draw as custom sleep, but without clearing (draw on top of book/black)
+  renderBitmapSleepScreen(overlay, false);
 
-  // Ensure coordinates are non-negative
-  if (x < 0) x = 0;
-  if (y < 0) y = 0;
-  Serial.printf("[%lu] [SLP] Overlay position: x=%d, y=%d (screen: %dx%d)\n", millis(), 
-                x, y, pageWidth, pageHeight);
+  if (overlay.hasGreyscale() &&
+      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER) {
+    int x, y;
+    float cropX, cropY;
+    getSleepBitmapLayout(overlay, x, y, cropX, cropY);
+    const auto pageWidth = renderer.getScreenWidth();
+    const auto pageHeight = renderer.getScreenHeight();
 
-  // Draw overlay on top of existing content (book or black background)
-  // Use same rendering approach as renderBitmapSleepScreen from master
-  Serial.printf("[%lu] [SLP] Drawing overlay to %d x %d\n", millis(), x, y);
-  renderer.setRenderMode(GfxRenderer::BW);
-  renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-
-  if (overlay.hasGreyscale()) {
-    // Store BW buffer (book + overlay) before clearing for grayscale passes
     renderer.storeBwBuffer();
-    
+
     overlay.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+    renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, cropX, cropY);
     renderer.copyGrayscaleLsbBuffers();
 
     overlay.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+    renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, cropX, cropY);
     renderer.copyGrayscaleMsbBuffers();
 
     renderer.displayGrayBuffer();
     renderer.setRenderMode(GfxRenderer::BW);
-    
-    // Restore book content (if on book) and re-draw overlay on top
+
     if (isOnBook) {
       renderer.restoreBwBuffer();
       overlay.rewindToData();
-      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, cropX, cropY);
     } else {
-      // Not on book - just draw overlay on black background
       renderer.clearScreen(0x00);
       overlay.rewindToData();
-      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, 0, 0);
+      renderer.drawBitmap(overlay, x, y, pageWidth, pageHeight, cropX, cropY);
     }
     renderer.cleanupGrayscaleWithFrameBuffer();
   }
-  
+
   overlayFile.close();
 }
 
