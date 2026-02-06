@@ -23,6 +23,7 @@ class HomeActivity final : public Activity {
   bool recentsDisplayed = false;
   bool firstRenderDone = false;
   bool hasOpdsUrl = false;
+  bool hasKoboSyncToken = false;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
@@ -33,6 +34,7 @@ class HomeActivity final : public Activity {
   const std::function<void()> onSettingsOpen;
   const std::function<void()> onFileTransferOpen;
   const std::function<void()> onOpdsBrowserOpen;
+  const std::function<void()> onKoboSyncOpen;
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
@@ -48,14 +50,16 @@ class HomeActivity final : public Activity {
                         const std::function<void(const std::string& path)>& onSelectBook,
                         const std::function<void()>& onMyLibraryOpen, const std::function<void()>& onRecentsOpen,
                         const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
-                        const std::function<void()>& onOpdsBrowserOpen)
+                        const std::function<void()>& onOpdsBrowserOpen,
+                        const std::function<void()>& onKoboSyncOpen = []() {})
       : Activity("Home", renderer, mappedInput),
         onSelectBook(onSelectBook),
         onMyLibraryOpen(onMyLibraryOpen),
         onRecentsOpen(onRecentsOpen),
         onSettingsOpen(onSettingsOpen),
         onFileTransferOpen(onFileTransferOpen),
-        onOpdsBrowserOpen(onOpdsBrowserOpen) {}
+        onOpdsBrowserOpen(onOpdsBrowserOpen),
+        onKoboSyncOpen(onKoboSyncOpen) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "fontIds.h"
+#include "KoboSyncTokenStore.h"
 
 // Initialize the static instance
 CrossPointSettings CrossPointSettings::instance;

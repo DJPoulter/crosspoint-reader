@@ -23,6 +23,8 @@
 #include "activities/home/RecentBooksActivity.h"
 #include "activities/network/CrossPointWebServerActivity.h"
 #include "activities/reader/ReaderActivity.h"
+#include "KoboIntegration.h"
+#include "KoboSyncTokenStore.h"
 #include "activities/settings/SettingsActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
@@ -243,10 +245,16 @@ void onGoToBrowser() {
   enterNewActivity(new OpdsBookBrowserActivity(renderer, mappedInputManager, onGoHome));
 }
 
+void onGoToKoboSync() {
+  exitActivity();
+  Activity* a = KoboIntegration::createSyncActivity(renderer, mappedInputManager, onGoHome);
+  if (a) enterNewActivity(a);
+}
+
 void onGoHome() {
   exitActivity();
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser));
+                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToKoboSync));
 }
 
 void setupDisplayAndFonts() {
@@ -330,6 +338,7 @@ void setup() {
 
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
+  KOBO_TOKEN_STORE.loadFromFile();
 
   // Boot to home screen directly when back button is held or when reader activity crashes 3 times
   if (APP_STATE.openEpubPath.empty() || mappedInputManager.isPressed(MappedInputManager::Button::Back) ||

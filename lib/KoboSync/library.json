@@ -1,0 +1,5 @@
+{
+  "name": "KoboSync",
+  "version": "1.0.0",
+  "description": "Kobo/BookLore sync: download books from shelf. Integrate via KoboIntegration.h."
+}
