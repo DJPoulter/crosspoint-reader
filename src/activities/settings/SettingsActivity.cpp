@@ -8,6 +8,7 @@
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
 #include "KOReaderSettingsActivity.h"
+#include "KoboIntegration.h"
 #include "MappedInputManager.h"
 #include "OtaUpdateActivity.h"
 #include "SettingsList.h"
@@ -49,6 +50,7 @@ void SettingsActivity::onEnter() {
   controlsSettings.insert(controlsSettings.begin(), SettingInfo::Action("Remap Front Buttons"));
   systemSettings.push_back(SettingInfo::Action("KOReader Sync"));
   systemSettings.push_back(SettingInfo::Action("OPDS Browser"));
+  systemSettings.push_back(SettingInfo::Action("Kobo Sync"));
   systemSettings.push_back(SettingInfo::Action("Clear Cache"));
   systemSettings.push_back(SettingInfo::Action("Check for updates"));
 
@@ -201,6 +203,15 @@ void SettingsActivity::toggleCurrentSetting() {
         exitActivity();
         updateRequired = true;
       }));
+      xSemaphoreGive(renderingMutex);
+    } else if (strcmp(setting.name, "Kobo Sync") == 0) {
+      xSemaphoreTake(renderingMutex, portMAX_DELAY);
+      exitActivity();
+      Activity* a = KoboIntegration::createSettingsActivity(renderer, mappedInput, [this] {
+        exitActivity();
+        updateRequired = true;
+      });
+      if (a) enterNewActivity(a);
       xSemaphoreGive(renderingMutex);
     } else if (strcmp(setting.name, "Clear Cache") == 0) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);

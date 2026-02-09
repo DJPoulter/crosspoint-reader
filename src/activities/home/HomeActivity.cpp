@@ -18,6 +18,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
+#include "KoboIntegration.h"
 
 void HomeActivity::taskTrampoline(void* param) {
   auto* self = static_cast<HomeActivity*>(param);
@@ -25,13 +26,12 @@ void HomeActivity::taskTrampoline(void* param) {
 }
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // My Library, Recents, File transfer, Settings
+  int count = 4;  // Browse Files, Recents, File transfer, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
-  if (hasOpdsUrl) {
-    count++;
-  }
+  if (hasOpdsUrl) count++;
+  if (hasKoboSyncToken) count++;
   return count;
 }
 
@@ -120,6 +120,7 @@ void HomeActivity::onEnter() {
 
   // Check if OPDS browser URL is configured
   hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
+  hasKoboSyncToken = KoboIntegration::isEnabled();
 
   selectorIndex = 0;
 
@@ -214,6 +215,7 @@ void HomeActivity::loop() {
     int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
     const int myLibraryIdx = idx++;
     const int recentsIdx = idx++;
+    const int koboSyncIdx = hasKoboSyncToken ? idx++ : -1;
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
     const int fileTransferIdx = idx++;
     const int settingsIdx = idx;
@@ -224,6 +226,8 @@ void HomeActivity::loop() {
       onMyLibraryOpen();
     } else if (menuSelectedIndex == recentsIdx) {
       onRecentsOpen();
+    } else if (menuSelectedIndex == koboSyncIdx) {
+      onKoboSyncOpen();
     } else if (menuSelectedIndex == opdsLibraryIdx) {
       onOpdsBrowserOpen();
     } else if (menuSelectedIndex == fileTransferIdx) {
@@ -262,9 +266,11 @@ void HomeActivity::render() {
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {"Browse Files", "Recents", "File Transfer", "Settings"};
+  if (hasKoboSyncToken) {
+    menuItems.insert(menuItems.begin() + 2, "Sync");
+  }
   if (hasOpdsUrl) {
-    // Insert OPDS Browser after My Library
-    menuItems.insert(menuItems.begin() + 2, "OPDS Browser");
+    menuItems.insert(menuItems.begin() + 2 + (hasKoboSyncToken ? 1 : 0), "OPDS Browser");
   }
 
   GUI.drawButtonMenu(
