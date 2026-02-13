@@ -20,7 +20,6 @@
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/StringUtils.h"
-#include "WifiAutoConnect.h"
 
 namespace {
 constexpr char KOBO_BASE_HOST[] = "https://books.wespo.nl/api/kobo/";
@@ -56,11 +55,7 @@ void KoboSyncActivity::onEnter() {
   // Always start display task so the UI is visible
   xTaskCreate(&KoboSyncActivity::taskTrampoline, "KoboSyncTask", 4096, this, 1, &displayTaskHandle);
 
-  // Try to connect to a known WiFi first
-  if (!ensureWifi()) {
-    WifiAutoConnect::tryAutoConnectToKnownWifi();
-  }
-
+  // Use system WiFi flow (WifiSelectionActivity auto-connects to last-used network on entry)
   if (!ensureWifi()) {
     state = State::NEED_WIFI;
     statusMessage = "Choose a network";
