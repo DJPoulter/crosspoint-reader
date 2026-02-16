@@ -20,11 +20,6 @@
 #include "util/StringUtils.h"
 #include "KoboIntegration.h"
 
-void HomeActivity::taskTrampoline(void* param) {
-  auto* self = static_cast<HomeActivity*>(param);
-  self->displayTaskLoop();
-}
-
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // Browse Files, Recents, File transfer, Settings
   if (!recentBooks.empty()) {
@@ -83,7 +78,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             book.coverBmpPath = "";
           }
           coverRendered = false;
-          updateRequired = true;
+          requestUpdate();
         } else if (StringUtils::checkFileExtension(book.path, ".xtch") ||
                    StringUtils::checkFileExtension(book.path, ".xtc")) {
           // Handle XTC file
@@ -101,7 +96,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               book.coverBmpPath = "";
             }
             coverRendered = false;
-            updateRequired = true;
+            requestUpdate();
           }
         }
       }
@@ -116,8 +111,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 void HomeActivity::onEnter() {
   Activity::onEnter();
 
-  renderingMutex = xSemaphoreCreateMutex();
-
   // Check if OPDS browser URL is configured
   hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
   hasKoboSyncToken = KoboIntegration::isEnabled();
@@ -128,27 +121,11 @@ void HomeActivity::onEnter() {
   loadRecentBooks(metrics.homeRecentBooksCount);
 
   // Trigger first update
-  updateRequired = true;
-
-  xTaskCreate(&HomeActivity::taskTrampoline, "HomeActivityTask",
-              8192,               // Stack size
-              this,               // Parameters
-              1,                  // Priority
-              &displayTaskHandle  // Task handle
-  );
+  requestUpdate();
 }
 
 void HomeActivity::onExit() {
   Activity::onExit();
-
-  // Wait until not rendering to delete task to avoid killing mid-instruction to EPD
-  xSemaphoreTake(renderingMutex, portMAX_DELAY);
-  if (displayTaskHandle) {
-    vTaskDelete(displayTaskHandle);
-    displayTaskHandle = nullptr;
-  }
-  vSemaphoreDelete(renderingMutex);
-  renderingMutex = nullptr;
 
   // Free the stored cover buffer if any
   freeCoverBuffer();
@@ -201,12 +178,12 @@ void HomeActivity::loop() {
 
   buttonNavigator.onNext([this, menuCount] {
     selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-    updateRequired = true;
+    requestUpdate();
   });
 
   buttonNavigator.onPrevious([this, menuCount] {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-    updateRequired = true;
+    requestUpdate();
   });
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -238,19 +215,7 @@ void HomeActivity::loop() {
   }
 }
 
-void HomeActivity::displayTaskLoop() {
-  while (true) {
-    if (updateRequired) {
-      updateRequired = false;
-      xSemaphoreTake(renderingMutex, portMAX_DELAY);
-      render();
-      xSemaphoreGive(renderingMutex);
-    }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-}
-
-void HomeActivity::render() {
+void HomeActivity::render(Activity::RenderLock&&) {
   auto metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -288,7 +253,7 @@ void HomeActivity::render() {
 
   if (!firstRenderDone) {
     firstRenderDone = true;
-    updateRequired = true;
+    requestUpdate();
   } else if (!recentsLoaded && !recentsLoading) {
     recentsLoading = true;
     loadRecentCovers(metrics.homeCoverHeight);
