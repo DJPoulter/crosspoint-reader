@@ -75,7 +75,7 @@ bool HttpDownloader::fetchUrlNoAuth(const std::string& url, std::string& outCont
   }
   HTTPClient http;
 
-  Serial.printf("[%lu] [HTTP] Fetch (no auth): %s\n", millis(), url.c_str());
+  LOG_DBG("HTTP", "Fetch (no auth): %s", url.c_str());
 
   http.begin(*client, url.c_str());
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -88,14 +88,14 @@ bool HttpDownloader::fetchUrlNoAuth(const std::string& url, std::string& outCont
 
   const int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[%lu] [HTTP] Fetch failed: %d\n", millis(), httpCode);
+    LOG_ERR("HTTP", "Fetch failed: %d", httpCode);
     http.end();
     return false;
   }
 
   outContent = http.getString().c_str();
   http.end();
-  Serial.printf("[%lu] [HTTP] Fetch success\n", millis());
+  LOG_DBG("HTTP", "Fetch success");
   return true;
 }
 
@@ -111,7 +111,7 @@ bool HttpDownloader::fetchUrlNoAuthKoboSync(const std::string& url, std::string&
   }
   HTTPClient http;
 
-  Serial.printf("[%lu] [HTTP] Fetch (Kobo sync): %s\n", millis(), url.c_str());
+  LOG_DBG("HTTP", "Fetch (Kobo sync): %s", url.c_str());
 
   http.begin(*client, url.c_str());
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -135,7 +135,7 @@ bool HttpDownloader::fetchUrlNoAuthKoboSync(const std::string& url, std::string&
   const int httpCode = http.GET();
   const unsigned long afterGet = millis();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[%lu] [HTTP] Fetch failed: %d\n", millis(), httpCode);
+    LOG_ERR("HTTP", "Fetch failed: %d", httpCode);
     http.end();
     return false;
   }
@@ -158,13 +158,11 @@ bool HttpDownloader::fetchUrlNoAuthKoboSync(const std::string& url, std::string&
   const unsigned long afterBody = millis();
   // Diagnose slow/truncated sync: GET = time to first byte (server/network); body = read time.
   // If body time ~timeout and size < Content-Length: server sent partial then stalled, or read timeout.
-  Serial.printf("[%lu] [HTTP] Fetch success (GET %lu ms, body %lu ms) size %zu%s\n", millis(),
-                afterGet - t0, afterBody - afterGet, outContent.size(),
-                (contentLength > 0 && outContent.size() != static_cast<size_t>(contentLength))
-                    ? " TRUNCATED"
-                    : "");
+  LOG_DBG("HTTP", "Fetch success (GET %lu ms, body %lu ms) size %zu%s", afterGet - t0, afterBody - afterGet,
+          outContent.size(),
+          (contentLength > 0 && outContent.size() != static_cast<size_t>(contentLength)) ? " TRUNCATED" : "");
   if (contentLength > 0 && outContent.size() != static_cast<size_t>(contentLength)) {
-    Serial.printf("[%lu] [HTTP] Expected Content-Length: %d\n", millis(), contentLength);
+    LOG_ERR("HTTP", "Expected Content-Length: %d", contentLength);
   }
   return true;
 }
@@ -293,7 +291,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFileNoAuth(const std::st
   }
   HTTPClient http;
 
-  Serial.printf("[%lu] [HTTP] Download (no auth): %s\n", millis(), url.c_str());
+  LOG_DBG("HTTP", "Download (no auth): %s", url.c_str());
 
   http.begin(*client, url.c_str());
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -306,7 +304,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFileNoAuth(const std::st
 
   const int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[%lu] [HTTP] Download failed: %d\n", millis(), httpCode);
+    LOG_ERR("HTTP", "Download failed: %d", httpCode);
     http.end();
     return HTTP_ERROR;
   }

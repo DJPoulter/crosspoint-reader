@@ -4,6 +4,7 @@
 #include <EpdFontFamily.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <Logging.h>
 #include <WiFi.h>
 
 #include <algorithm>
@@ -84,7 +85,7 @@ void KoboSyncActivity::onExit() {
   // Disconnect WiFi after sync so we don't leave the radio on
   if (state == State::DONE || state == State::ERROR) {
     WiFi.disconnect(false);
-    Serial.printf("[%lu] [Kobo] WiFi disconnected after sync\n", millis());
+    LOG_DBG("Kobo", "WiFi disconnected after sync");
   }
   Activity::onExit();
   if (renderingMutex) {
@@ -185,11 +186,11 @@ void KoboSyncActivity::runHandshake() {
   }
 
   if (librarySyncUrl.empty()) {
-    Serial.printf("[%lu] [Kobo] Init response (%zu bytes), no library_sync URL\n", millis(), body.size());
+    LOG_ERR("Kobo", "Init response (%zu bytes), no library_sync URL", body.size());
     if (body.size() > 0 && body.size() <= 256) {
-      Serial.printf("[%lu] [Kobo] Body: %s\n", millis(), body.c_str());
+      LOG_DBG("Kobo", "Body: %s", body.c_str());
     } else if (body.size() > 256) {
-      Serial.printf("[%lu] [Kobo] Body (first 200): %.200s\n", millis(), body.c_str());
+      LOG_DBG("Kobo", "Body (first 200): %.200s", body.c_str());
     }
     state = State::ERROR;
     errorMessage = "Invalid response";
@@ -198,7 +199,7 @@ void KoboSyncActivity::runHandshake() {
     return;
   }
 
-  Serial.printf("[%lu] [Kobo] library_sync: %s\n", millis(), librarySyncUrl.c_str());
+  LOG_DBG("Kobo", "library_sync: %s", librarySyncUrl.c_str());
   hasMorePages = true;
   state = State::FETCH_LIST;
   statusMessage = "Fetching list...";
@@ -220,8 +221,7 @@ void KoboSyncActivity::runFetchList() {
 
   for (int attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) {
-      Serial.printf("[%lu] [Kobo] Retry %d/%d after truncated response (IncompleteInput)\n", millis(), attempt,
-                    maxAttempts);
+      LOG_DBG("Kobo", "Retry %d/%d after truncated response (IncompleteInput)", attempt, maxAttempts);
     }
     body.clear();
     if (!HttpDownloader::fetchUrlNoAuthKoboSync(url, body, KOBO_USER_AGENT, &headers)) {
@@ -240,11 +240,11 @@ void KoboSyncActivity::runFetchList() {
       break;
     }
 
-    Serial.printf("[%lu] [Kobo] JSON error: %s, body size %zu\n", millis(), err.c_str(), body.size());
+    LOG_ERR("Kobo", "JSON error: %s, body size %zu", err.c_str(), body.size());
     if (body.size() > 0 && body.size() <= 300) {
-      Serial.printf("[%lu] [Kobo] Body: %s\n", millis(), body.c_str());
+      LOG_DBG("Kobo", "Body: %s", body.c_str());
     } else if (body.size() > 300) {
-      Serial.printf("[%lu] [Kobo] Body (first 300): %.300s\n", millis(), body.c_str());
+      LOG_DBG("Kobo", "Body (first 300): %.300s", body.c_str());
     }
 
     // Retry only on IncompleteInput (truncated body); fail immediately on other errors or after last attempt
@@ -331,13 +331,12 @@ void KoboSyncActivity::runFetchList() {
     downloadUrls.push_back(downloadUrl);
   }
 
-  Serial.printf("[%lu] [Kobo] Token response: %zu items (total %zu), X-Kobo-Sync=%s, token_len=%zu\n",
-                millis(), items.size(), downloadUrls.size(), headers.responseSync.c_str(),
-                nextSyncToken.size());
+  LOG_DBG("Kobo", "Token response: %zu items (total %zu), X-Kobo-Sync=%s, token_len=%zu", items.size(),
+          downloadUrls.size(), headers.responseSync.c_str(), nextSyncToken.size());
   // Fallback: server may send next token but not X-Kobo-Sync; if we got items and have a token, request again
   if (!hasMorePages && !nextSyncToken.empty() && items.size() > 0) {
     hasMorePages = true;
-    Serial.printf("[%lu] [Kobo] More pages (token present, X-Kobo-Sync missing)\n", millis());
+    LOG_DBG("Kobo", "More pages (token present, X-Kobo-Sync missing)");
   }
 
   // Optional: total from body for display (server may not send it when using token pagination)
@@ -354,7 +353,7 @@ void KoboSyncActivity::runFetchList() {
     if (totalBookCount == 0) totalBookCount = getCount("total");
     if (totalBookCount == 0) totalBookCount = getCount("NumberOfItems");
     if (totalBookCount > 0) {
-      Serial.printf("[%lu] [Kobo] API reports %zu books total\n", millis(), totalBookCount);
+      LOG_DBG("Kobo", "API reports %zu books total", totalBookCount);
     }
   }
 
@@ -564,8 +563,7 @@ void KoboSyncActivity::removeOffShelfBooks() {
     shelfPaths.insert("/" + StringUtils::sanitizeFilename(title, 80) + ".epub");
   }
   std::vector<std::string> manifest = loadManifest();
-  Serial.printf("[%lu] [Kobo] removeOffShelfBooks: manifest %zu, shelf %zu\n", millis(), manifest.size(),
-                shelfPaths.size());
+  LOG_DBG("Kobo", "removeOffShelfBooks: manifest %zu, shelf %zu", manifest.size(), shelfPaths.size());
 
   std::vector<std::string> kept;
   for (const auto& path : manifest) {
@@ -577,9 +575,9 @@ void KoboSyncActivity::removeOffShelfBooks() {
     } else {
       if (Storage.exists(norm.c_str())) {
         if (Storage.remove(norm.c_str())) {
-          Serial.printf("[%lu] [Kobo] Removed (no longer on shelf): %s\n", millis(), norm.c_str());
+          LOG_DBG("Kobo", "Removed (no longer on shelf): %s", norm.c_str());
         } else {
-          Serial.printf("[%lu] [Kobo] Remove failed (file in use?): %s\n", millis(), norm.c_str());
+          LOG_ERR("Kobo", "Remove failed (file in use?): %s", norm.c_str());
         }
       }
       // Path no longer on shelf: do not add to kept so manifest is updated below

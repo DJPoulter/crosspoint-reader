@@ -1,7 +1,7 @@
 #include "KoboSyncTokenStore.h"
 
 #include <HalStorage.h>
-#include <HardwareSerial.h>
+#include <Logging.h>
 #include <Serialization.h>
 
 #include <cstring>
@@ -33,7 +33,7 @@ bool KoboSyncTokenStore::loadFromFile() {
   if (token.size() > MAX_TOKEN_LENGTH) {
     token.resize(MAX_TOKEN_LENGTH);
   }
-  Serial.printf("[%lu] [KTS] Loaded Kobo sync token (%zu chars)\n", millis(), token.size());
+  LOG_DBG("KTS", "Loaded Kobo sync token (%zu chars)", token.size());
   return true;
 }
 
@@ -49,7 +49,7 @@ bool KoboSyncTokenStore::saveToFile() const {
   serialization::writeString(file, token);
   file.close();
 
-  Serial.printf("[%lu] [KTS] Saved Kobo sync token (%zu chars)\n", millis(), token.size());
+  LOG_DBG("KTS", "Saved Kobo sync token (%zu chars)", token.size());
   return true;
 }
 
